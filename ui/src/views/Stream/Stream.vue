@@ -26,13 +26,9 @@
             >
                 <div class="viewport-header">{{ ch.label }}</div>
                 <div class="viewport-body">
-                    <canvas
-                        v-if="ch.hasSignal"
-                        :ref="el => { if (el) canvasRefs[ch.id] = el }"
-                        :width="ch.width"
-                        :height="ch.height"
-                    />
-                    <div v-else class="no-signal">
+                    <!-- Canvas is always mounted so canvasRefs is populated immediately. -->
+                    <canvas :ref="el => { if (el) canvasRefs[ch.id] = el }" />
+                    <div v-if="!hasSignal[ch.id]" class="no-signal">
                         <span class="no-signal-icon">&#9634;</span>
                         <span>No signal</span>
                     </div>
@@ -43,51 +39,52 @@
 </template>
 
 <script>
-import { mapGetters } from 'vuex';
-
 const VIEW_OPTIONS = [
-    { value: 'cl_view',        label: 'CL',       channels: ['cl']       },
-    { value: 'ir_view',        label: 'IR',       channels: ['ir']       },
-    { value: 'both_views',     label: 'Both',     channels: ['cl', 'ir'] },
+    { value: 'cl_view',    label: 'CL',   channels: ['cl']       },
+    { value: 'ir_view',    label: 'IR',   channels: ['ir']       },
+    { value: 'both_views', label: 'Both', channels: ['cl', 'ir'] },
 ];
 
 const CHANNEL_META = {
-    cl: { id: 'cl', label: 'CL View',  width: 640, height: 480 },
-    ir: { id: 'ir', label: 'IR View',  width: 640, height: 480 },
+    cl: { id: 'cl', label: 'CL View' },
+    ir: { id: 'ir', label: 'IR View' },
 };
 
 export default {
     name: 'StreamView',
     data() {
         return {
-            viewOptions:   VIEW_OPTIONS,
-            selectedView:  'cl_view',
-            wsState:       'disconnected',
-            ws:            null,
-            canvasRefs:    {},
+            viewOptions:  VIEW_OPTIONS,
+            selectedView: 'cl_view',
+            wsState:      'disconnected',
+            ws:           null,
+            canvasRefs:   {},
+            hasSignal:    {},   // { cl: true/false, ir: true/false }
         };
     },
     computed: {
-        ...mapGetters('authentication', ['csrfToken']),
         currentOption() {
             return VIEW_OPTIONS.find(v => v.value === this.selectedView) || VIEW_OPTIONS[0];
         },
         channels() {
-            return this.currentOption.channels.map(id => ({
-                ...CHANNEL_META[id],
-                hasSignal: false,
-            }));
+            return this.currentOption.channels.map(id => CHANNEL_META[id]);
         },
         panelClass() {
             return this.channels.length > 1 ? 'dual' : 'single';
         },
         wsStateLabel() {
-            return { connected: 'Connected', connecting: 'Connecting…', disconnected: 'Disconnected' }[this.wsState];
+            return {
+                connected:    'Connected',
+                connecting:   'Connecting…',
+                disconnected: 'Disconnected',
+            }[this.wsState];
         },
     },
     watch: {
         selectedView() {
-            this.reconnect();
+            this.hasSignal  = {};
+            this.canvasRefs = {};
+            this.connect();
         },
     },
     mounted() {
@@ -104,8 +101,8 @@ export default {
             this.closeWs();
             this.wsState = 'connecting';
 
-            const proto  = location.protocol === 'https:' ? 'wss' : 'ws';
-            const url    = `${proto}://${location.host}/api/v1/stream?view=${this.selectedView}`;
+            const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+            const url   = `${proto}://${location.host}/api/v1/stream?view=${this.selectedView}`;
 
             this.ws = new WebSocket(url);
             this.ws.binaryType = 'arraybuffer';
@@ -114,9 +111,6 @@ export default {
             this.ws.onclose   = () => { this.wsState = 'disconnected'; };
             this.ws.onerror   = () => { this.wsState = 'disconnected'; };
             this.ws.onmessage = (evt) => this.handleFrame(evt.data);
-        },
-        reconnect() {
-            this.connect();
         },
         closeWs() {
             if (this.ws) {
@@ -142,6 +136,9 @@ export default {
                 canvas.height = img.height;
                 canvas.getContext('2d').drawImage(img, 0, 0);
                 URL.revokeObjectURL(url);
+                if (!this.hasSignal[channelId]) {
+                    this.hasSignal = { ...this.hasSignal, [channelId]: true };
+                }
             };
             img.src = url;
         },

@@ -31,6 +31,17 @@ void StreamManager::remove(WsStream* conn) noexcept {
         "WS client removed: total={}", clients_.size());
 }
 
+void StreamManager::pushFrame(SourceChannel channel, const std::vector<uint8_t>& jpeg) {
+    // Build message: [1-byte channel tag][jpeg data]
+    std::vector<uint8_t> msg;
+    msg.reserve(1 + jpeg.size());
+    msg.push_back(static_cast<uint8_t>(channel));
+    msg.insert(msg.end(), jpeg.begin(), jpeg.end());
+
+    ViewType vt = (channel == SourceChannel::CL) ? ViewType::kColorMain : ViewType::kIrMain;
+    broadcast(vt, msg);
+}
+
 void StreamManager::broadcast(ViewType viewType, const std::vector<uint8_t>& frame) {
     std::lock_guard<std::mutex> lock(mutex_);
     boost::beast::error_code ec;

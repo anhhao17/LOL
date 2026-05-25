@@ -127,14 +127,14 @@ export default {
             this.wsState = 'disconnected';
         },
         handleFrame(data) {
-            // Each frame is a raw JPEG blob — detect channel from first 2 bytes of header
-            // or rely on binary message order per selected view.
-            // For simplicity: single view → draw to first canvas; dual → alternate by message tag.
-            const channelId = this.channels.length > 1 ? this.detectChannel(data) : this.channels[0]?.id;
+            // Protocol: [1-byte channel tag (0x00=CL, 0x01=IR)][JPEG bytes...]
+            const bytes     = new Uint8Array(data);
+            const channelId = bytes[0] === 0x01 ? 'ir' : 'cl';
             const canvas    = this.canvasRefs[channelId];
             if (!canvas) return;
 
-            const blob = new Blob([data], { type: 'image/jpeg' });
+            const jpeg = data.slice(1);
+            const blob = new Blob([jpeg], { type: 'image/jpeg' });
             const url  = URL.createObjectURL(blob);
             const img  = new Image();
             img.onload = () => {
@@ -144,11 +144,6 @@ export default {
                 URL.revokeObjectURL(url);
             };
             img.src = url;
-        },
-        detectChannel(data) {
-            // Placeholder: read a 1-byte channel tag prepended by the server.
-            const view = new Uint8Array(data);
-            return view[0] === 0x01 ? 'ir' : 'cl';
         },
     },
 };

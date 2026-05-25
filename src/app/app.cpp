@@ -1,5 +1,6 @@
 #include "app/app.hpp"
 #include "common/logger.hpp"
+#include "streaming/file_frame_source.hpp"
 #include "middleware/auth_middleware.hpp"
 #include "middleware/cors_middleware.hpp"
 #include "middleware/csrf_middleware.hpp"
@@ -72,6 +73,9 @@ int App::run(int argc, char** argv) {
 
         for (auto& t : threads_) t.join();
 
+        if (clSource_) clSource_->stop();
+        if (irSource_) irSource_->stop();
+
     } catch (const std::exception& ex) {
         LOG_CRITICAL(common::Logger::get(kLog), "Fatal: {}", ex.what());
         return 1;
@@ -90,6 +94,19 @@ void App::setupContext(const Config& cfg) {
 
     wsHandler_ = std::make_unique<streaming::WebSocketHandler>(
         ctx_.streamManager, ctx_.sessionStore, cfg.maxWsSessions);
+
+    auto startSource = [&](std::unique_ptr<streaming::IFrameSource>& dest,
+                           const std::filesystem::path& path,
+                           streaming::SourceChannel ch) {
+        if (path.empty()) return;
+        dest = std::make_unique<streaming::FileFrameSource>(path);
+        dest->start([mgr = ctx_.streamManager, ch](const std::vector<uint8_t>& frame) {
+            mgr->pushFrame(ch, frame);
+        });
+    };
+
+    startSource(clSource_, cfg.videoFileCl, streaming::SourceChannel::CL);
+    startSource(irSource_, cfg.videoFileIr, streaming::SourceChannel::IR);
 }
 
 void App::setupMiddleware(const Config& cfg) {

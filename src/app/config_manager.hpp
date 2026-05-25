@@ -18,6 +18,8 @@ struct Config {
     unsigned int maxRequestsPerWindow{200};
     std::chrono::seconds rateWindow{10};
     std::vector<std::string> allowedOrigins;
+    std::filesystem::path videoFileCl;  // MP4 for CL channel (optional)
+    std::filesystem::path videoFileIr;  // MP4 for IR channel (optional)
 };
 
 class ConfigManager {

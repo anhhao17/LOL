@@ -16,6 +16,8 @@ void ConfigManager::printHelp(const char* progName) {
         << "  --threads <n>         IO thread count (default: 4)\n"
         << "  --max-ws <n>          Max concurrent WS sessions (default: 6)\n"
         << "  --allow-origin <url>  Allowed CORS origin (repeatable)\n"
+        << "  --video-cl <file>     MP4 file to loop for CL channel\n"
+        << "  --video-ir <file>     MP4 file to loop for IR channel\n"
         << "  --help, -h            Show this help\n";
 }
 
@@ -47,6 +49,10 @@ bool ConfigManager::parse(int argc, char** argv) {
             config_.maxWsSessions = static_cast<size_t>(std::stoi(next()));
         } else if (arg == "--allow-origin") {
             config_.allowedOrigins.push_back(next());
+        } else if (arg == "--video-cl") {
+            config_.videoFileCl = next();
+        } else if (arg == "--video-ir") {
+            config_.videoFileIr = next();
         } else {
             throw std::runtime_error("Unknown option: " + arg);
         }

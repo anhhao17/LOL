@@ -13,8 +13,12 @@ find_package(nlohmann_json REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SQLITE3 REQUIRED sqlite3)
-pkg_check_modules(SODIUM REQUIRED libsodium)
+pkg_check_modules(SQLITE3   REQUIRED sqlite3)
+pkg_check_modules(SODIUM    REQUIRED libsodium)
+pkg_check_modules(AVFORMAT  REQUIRED libavformat)
+pkg_check_modules(AVCODEC   REQUIRED libavcodec)
+pkg_check_modules(SWSCALE   REQUIRED libswscale)
+pkg_check_modules(AVUTIL    REQUIRED libavutil)
 
 add_executable(avenger
     src/main.cpp
@@ -34,6 +38,7 @@ add_executable(avenger
     src/api/login_handler.cpp
     src/api/logout_handler.cpp
     src/api/static_handler.cpp
+    src/streaming/file_frame_source.cpp
     src/streaming/stream_manager.cpp
     src/streaming/websocket_handler.cpp
     src/server/connection.cpp
@@ -46,6 +51,10 @@ target_include_directories(avenger PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${SQLITE3_INCLUDE_DIRS}
     ${SODIUM_INCLUDE_DIRS}
+    ${AVFORMAT_INCLUDE_DIRS}
+    ${AVCODEC_INCLUDE_DIRS}
+    ${SWSCALE_INCLUDE_DIRS}
+    ${AVUTIL_INCLUDE_DIRS}
 )
 
 target_link_libraries(avenger PRIVATE
@@ -58,6 +67,10 @@ target_link_libraries(avenger PRIVATE
     fmt::fmt
     ${SQLITE3_LIBRARIES}
     ${SODIUM_LIBRARIES}
+    ${AVFORMAT_LIBRARIES}
+    ${AVCODEC_LIBRARIES}
+    ${SWSCALE_LIBRARIES}
+    ${AVUTIL_LIBRARIES}
 )
 
 target_compile_options(avenger PRIVATE

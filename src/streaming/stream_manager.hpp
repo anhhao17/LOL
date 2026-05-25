@@ -1,11 +1,13 @@
 #pragma once
 
+#include "streaming/i_frame_source.hpp"
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -34,6 +36,9 @@ public:
 
     bool add(WsStream* conn, ViewType viewType, std::string sessionId);
     void remove(WsStream* conn) noexcept;
+
+    // Called by frame sources: prepends the 1-byte channel tag and broadcasts.
+    void pushFrame(SourceChannel channel, const std::vector<uint8_t>& jpeg);
 
     // Broadcast binary frame to all clients subscribed to the given view type.
     void broadcast(ViewType viewType, const std::vector<uint8_t>& frame);

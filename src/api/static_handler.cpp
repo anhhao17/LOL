@@ -12,8 +12,9 @@ StaticHandler::StaticHandler(std::filesystem::path webRoot)
     : webRoot_(std::move(webRoot)) {}
 
 void StaticHandler::registerRoutes(routing::Router& router) {
-    // Catch-all for /ui/** and bare /
-    router.addRoute(http::verb::get, "/ui/#",
+    // Catch-all: serves any path not already claimed by an API route.
+    // The trie resolves specific routes (e.g. /api/**) before falling back here.
+    router.addRoute(http::verb::get, "/#",
         [this](http_layer::HttpRequest& req, std::shared_ptr<http_layer::AsyncResp> asyncResp) {
             serveFile(req, std::move(asyncResp));
         });
@@ -24,14 +25,12 @@ void StaticHandler::registerRoutes(routing::Router& router) {
 }
 
 std::filesystem::path StaticHandler::resolvePath(const std::string& target) const {
-    std::string relativePart = target;
+    // Strip query string before resolving.
+    auto qpos        = target.find('?');
+    std::string path = (qpos != std::string::npos) ? target.substr(0, qpos) : target;
 
-    // Strip /ui prefix to map to filesystem.
-    if (relativePart.rfind("/ui/", 0) == 0) {
-        relativePart = relativePart.substr(3); // keep leading /
-    } else if (relativePart == "/" || relativePart == "/ui") {
-        relativePart = "/index.html";
-    }
+    // Map bare "/" to index.html; everything else maps directly into webRoot_.
+    std::string relativePart = (path == "/") ? "/index.html" : path;
 
     auto resolved = std::filesystem::weakly_canonical(
         webRoot_ / relativePart.substr(1)); // remove leading /

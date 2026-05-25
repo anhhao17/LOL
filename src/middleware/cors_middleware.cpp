@@ -19,7 +19,8 @@ void CorsMiddleware::before(http_layer::HttpRequest& req,
     auto origin = req.header("Origin");
 
     if (!origin.empty()) {
-        if (!isOriginAllowed(origin)) {
+        // If no origins are configured, the server is in open/local mode — allow all.
+        if (!allowedOrigins_.empty() && !isOriginAllowed(origin)) {
             LOG_WARN(common::Logger::get("middleware"),
                 "CORS rejected origin='{}' path='{}'", origin, req.target());
             asyncResp->resp = http_layer::HttpResponse::error(

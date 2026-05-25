@@ -1,5 +1,8 @@
 #pragma once
 
+#include "api/login_handler.hpp"
+#include "api/logout_handler.hpp"
+#include "api/static_handler.hpp"
 #include "app/config_manager.hpp"
 #include "app/shared_context.hpp"
 #include "routing/router.hpp"
@@ -28,11 +31,16 @@ private:
     void waitForSignal();
 
     boost::asio::io_context ioc_;
-    std::unique_ptr<routing::Router> router_;
+    std::unique_ptr<routing::Router>            router_;
     std::unique_ptr<streaming::WebSocketHandler> wsHandler_;
-    std::unique_ptr<server::HttpServer> httpServer_;
+    std::unique_ptr<server::HttpServer>          httpServer_;
     SharedContext ctx_;
     std::vector<std::thread> threads_;
+
+    // Handlers must outlive the router's stored lambdas.
+    std::unique_ptr<api::LoginHandler>  loginHandler_;
+    std::unique_ptr<api::LogoutHandler> logoutHandler_;
+    std::unique_ptr<api::StaticHandler> staticHandler_;
 };
 
 } // namespace app

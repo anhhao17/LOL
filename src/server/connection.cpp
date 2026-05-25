@@ -69,7 +69,13 @@ void Connection::onRead(beast::error_code ec, size_t) {
             self->sendResponse(std::move(response));
         });
 
-    router_.dispatch(httpReq, std::move(asyncResp));
+    try {
+        router_.dispatch(httpReq, asyncResp);
+    } catch (const std::exception& ex) {
+        LOG_ERROR(common::Logger::get(kLog), "Dispatch exception: {}", ex.what());
+        asyncResp->resp = http_layer::HttpResponse::error(
+            common::ErrorCode::kInternalError, "Internal server error");
+    }
 }
 
 void Connection::sendResponse(http_layer::HttpResponse response) {

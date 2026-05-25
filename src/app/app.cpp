@@ -1,7 +1,4 @@
 #include "app/app.hpp"
-#include "api/login_handler.hpp"
-#include "api/logout_handler.hpp"
-#include "api/static_handler.hpp"
 #include "common/logger.hpp"
 #include "middleware/auth_middleware.hpp"
 #include "middleware/cors_middleware.hpp"
@@ -58,10 +55,16 @@ int App::run(int argc, char** argv) {
         LOG_INFO(common::Logger::get(kLog),
             "Server started on port {} with {} threads", cfg.port, cfg.threadCount);
 
-        // Launch IO threads.
+        // Launch IO threads. Wrap ioc_.run() so an unhandled exception in
+        // a handler tears down just that thread instead of calling std::terminate.
         threads_.reserve(cfg.threadCount - 1);
         for (size_t i = 1; i < cfg.threadCount; ++i) {
-            threads_.emplace_back([this] { ioc_.run(); });
+            threads_.emplace_back([this] {
+                try { ioc_.run(); }
+                catch (const std::exception& ex) {
+                    LOG_ERROR(common::Logger::get(kLog), "IO thread exception: {}", ex.what());
+                }
+            });
         }
 
         waitForSignal();
@@ -107,9 +110,13 @@ void App::setupMiddleware(const Config& cfg) {
 }
 
 void App::setupRoutes(const Config& cfg) {
-    api::LoginHandler{ctx_}.registerRoutes(*router_);
-    api::LogoutHandler{ctx_}.registerRoutes(*router_);
-    api::StaticHandler{cfg.webRoot}.registerRoutes(*router_);
+    loginHandler_  = std::make_unique<api::LoginHandler>(ctx_);
+    logoutHandler_ = std::make_unique<api::LogoutHandler>(ctx_);
+    staticHandler_ = std::make_unique<api::StaticHandler>(cfg.webRoot);
+
+    loginHandler_->registerRoutes(*router_);
+    logoutHandler_->registerRoutes(*router_);
+    staticHandler_->registerRoutes(*router_);
 }
 
 void App::waitForSignal() {

@@ -17,17 +17,27 @@ std::optional<ViewType> StreamManager::parseViewType(std::string_view s) noexcep
 }
 
 void StreamManager::setSource(SourceChannel channel, std::unique_ptr<IFrameSource> source) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(sourceMutex_);
     sources_[channel] = std::move(source);
 }
 
 bool StreamManager::add(WsStream* conn, ViewType viewType, std::string sessionId) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    clients_[conn] = ClientInfo{viewType, std::move(sessionId)};
-    LOG_INFO(common::Logger::get(kLog), "WS client added: total={}", clients_.size());
+    bool shouldStart = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        clients_[conn] = ClientInfo{viewType, std::move(sessionId)};
+        LOG_INFO(common::Logger::get(kLog), "WS client added: total={}", clients_.size());
+        if (clients_.size() == 1) shouldStart = true;
+    }
 
-    if (clients_.size() == 1)
-        startSources();
+    if (shouldStart) {
+        std::lock_guard<std::mutex> lock(sourceMutex_);
+        if (!sourcesRunning_) {
+            sourcesRunning_ = true;
+            LOG_INFO(common::Logger::get(kLog), "Starting frame sources");
+            startSources();
+        }
+    }
 
     return true;
 }
@@ -38,23 +48,22 @@ void StreamManager::remove(WsStream* conn) noexcept {
         std::lock_guard<std::mutex> lock(mutex_);
         clients_.erase(conn);
         LOG_INFO(common::Logger::get(kLog), "WS client removed: total={}", clients_.size());
-        if (clients_.empty()) {
-            sourcesRunning_ = false;
-            shouldStop = true;
-        }
+        if (clients_.empty()) shouldStop = true;
     }
-    // Stop sources outside the lock — source threads call pushFrame which also locks.
+
     if (shouldStop) {
-        LOG_INFO(common::Logger::get(kLog), "Stopping frame sources (no clients)");
-        for (auto& [ch, src] : sources_)
-            src->stop();
+        std::lock_guard<std::mutex> lock(sourceMutex_);
+        if (sourcesRunning_) {
+            sourcesRunning_ = false;
+            LOG_INFO(common::Logger::get(kLog), "Stopping frame sources (no clients)");
+            for (auto& [ch, src] : sources_)
+                src->stop();
+        }
     }
 }
 
 void StreamManager::startSources() {
-    if (sourcesRunning_) return;
-    sourcesRunning_ = true;
-    LOG_INFO(common::Logger::get(kLog), "Starting frame sources");
+    // Called under sourceMutex_.
     for (auto& [ch, src] : sources_) {
         SourceChannel channel = ch;
         src->start([this, channel](const std::vector<uint8_t>& frame) {
@@ -62,7 +71,6 @@ void StreamManager::startSources() {
         });
     }
 }
-
 
 void StreamManager::pushFrame(SourceChannel channel, const std::vector<uint8_t>& jpeg) {
     std::vector<uint8_t> msg;

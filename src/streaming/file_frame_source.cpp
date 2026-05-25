@@ -23,6 +23,9 @@ FileFrameSource::~FileFrameSource() {
 }
 
 void FileFrameSource::start(FrameCallback callback) {
+    // Ensure any previous thread is fully stopped before creating a new one.
+    // Assigning to a joinable std::thread calls std::terminate.
+    stop();
     callback_ = std::move(callback);
     running_  = true;
     thread_   = std::thread(&FileFrameSource::loop, this);

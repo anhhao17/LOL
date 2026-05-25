@@ -57,10 +57,11 @@ private:
         std::string sessionId;
     };
 
-    std::map<WsStream*, ClientInfo>          clients_;
+    std::map<WsStream*, ClientInfo>                        clients_;
     std::map<SourceChannel, std::unique_ptr<IFrameSource>> sources_;
-    bool                                     sourcesRunning_{false};
-    mutable std::mutex                       mutex_;
+    bool                                                   sourcesRunning_{false};
+    mutable std::mutex mutex_;        // protects clients_
+    std::mutex         sourceMutex_;  // serialises start/stop lifecycle
 };
 
 } // namespace streaming

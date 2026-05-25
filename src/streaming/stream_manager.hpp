@@ -50,8 +50,7 @@ public:
     [[nodiscard]] size_t clientCount() const noexcept;
 
 private:
-    void startSources();
-    void stopSources();
+    void startSources(); // call with mutex_ held
 
     struct ClientInfo {
         ViewType viewType;

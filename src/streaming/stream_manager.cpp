@@ -33,12 +33,22 @@ bool StreamManager::add(WsStream* conn, ViewType viewType, std::string sessionId
 }
 
 void StreamManager::remove(WsStream* conn) noexcept {
-    std::lock_guard<std::mutex> lock(mutex_);
-    clients_.erase(conn);
-    LOG_INFO(common::Logger::get(kLog), "WS client removed: total={}", clients_.size());
-
-    if (clients_.empty())
-        stopSources();
+    bool shouldStop = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        clients_.erase(conn);
+        LOG_INFO(common::Logger::get(kLog), "WS client removed: total={}", clients_.size());
+        if (clients_.empty()) {
+            sourcesRunning_ = false;
+            shouldStop = true;
+        }
+    }
+    // Stop sources outside the lock — source threads call pushFrame which also locks.
+    if (shouldStop) {
+        LOG_INFO(common::Logger::get(kLog), "Stopping frame sources (no clients)");
+        for (auto& [ch, src] : sources_)
+            src->stop();
+    }
 }
 
 void StreamManager::startSources() {
@@ -53,13 +63,6 @@ void StreamManager::startSources() {
     }
 }
 
-void StreamManager::stopSources() {
-    if (!sourcesRunning_) return;
-    sourcesRunning_ = false;
-    LOG_INFO(common::Logger::get(kLog), "Stopping frame sources (no clients)");
-    for (auto& [ch, src] : sources_)
-        src->stop();
-}
 
 void StreamManager::pushFrame(SourceChannel channel, const std::vector<uint8_t>& jpeg) {
     std::vector<uint8_t> msg;

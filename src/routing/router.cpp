@@ -1,5 +1,6 @@
 #include "routing/router.hpp"
 #include "common/logger.hpp"
+#include <string>
 
 namespace routing {
 
@@ -30,7 +31,14 @@ void Router::runMiddleware(size_t index,
 
 void Router::dispatch(http_layer::HttpRequest& req,
                       std::shared_ptr<http_layer::AsyncResp> asyncResp) {
-    auto routeIndex = trie_.match(req.target());
+    // Strip query parameters from target for route matching
+    std::string target = req.target();
+    auto queryPos = target.find('?');
+    if (queryPos != std::string::npos) {
+        target = target.substr(0, queryPos);
+    }
+
+    auto routeIndex = trie_.match(target);
 
     if (!routeIndex) {
         asyncResp->resp = http_layer::HttpResponse::notFound();

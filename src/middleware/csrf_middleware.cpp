@@ -10,8 +10,9 @@ bool CsrfMiddleware::isMutatingMethod(std::string_view method) noexcept {
 void CsrfMiddleware::before(http_layer::HttpRequest& req,
                             const std::shared_ptr<http_layer::AsyncResp>& asyncResp,
                             NextFn next) {
-    // Login endpoint is public — no CSRF check needed.
-    if (std::string(req.target()) == "/api/v1/login") {
+    // Login and stream endpoints are public — no CSRF check needed.
+    if (std::string(req.target()) == "/api/v1/login" ||
+        std::string(req.target()).rfind("/api/v1/stream", 0) == 0) {
         next();
         return;
     }
@@ -21,8 +22,9 @@ void CsrfMiddleware::before(http_layer::HttpRequest& req,
         return;
     }
 
+    // If there's no session, Auth middleware will have already rejected
+    // unauthenticated requests for protected paths. Skip CSRF check.
     if (!req.hasSession()) {
-        // Auth middleware will have already rejected unauthenticated requests.
         next();
         return;
     }

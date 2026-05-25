@@ -74,25 +74,7 @@ WsUpgradeResult WebSocketHandler::validateUpgrade(
     const boost::beast::http::request<boost::beast::http::string_body>& req,
     std::string_view clientIp) const {
 
-    // Step 1: RFC 6455 required headers.
-    auto upgradeIt  = req.find(boost::beast::http::field::upgrade);
-    auto versionIt  = req.find("Sec-WebSocket-Version");
-    auto keyIt      = req.find("Sec-WebSocket-Key");
-
-    if (upgradeIt == req.end() || upgradeIt->value() != "websocket") {
-        LOG_WARN(common::Logger::get(kLog), "WS upgrade: missing Upgrade: websocket");
-        return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
-    }
-    if (versionIt == req.end() || versionIt->value() != "13") {
-        LOG_WARN(common::Logger::get(kLog), "WS upgrade: Sec-WebSocket-Version != 13");
-        return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
-    }
-    if (keyIt == req.end()) {
-        LOG_WARN(common::Logger::get(kLog), "WS upgrade: missing Sec-WebSocket-Key");
-        return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
-    }
-
-    // Step 2: Resolve view type.
+    // Step 1: Resolve view type (from query string or protocol header).
     // Priority: URL query string (?view=cl_view) → Sec-WebSocket-Protocol header.
     std::string viewStr = parseViewFromTarget(req.target());
     std::string protocolToken;
@@ -118,7 +100,7 @@ WsUpgradeResult WebSocketHandler::validateUpgrade(
         return WsUpgradeResult::fail(common::ErrorCode::kInvalidStreamType);
     }
 
-    // Step 3: Token validation (protocol header token or HttpOnly session cookie).
+    // Step 2: Token validation (protocol header token or HttpOnly session cookie).
     auto token = extractToken(req, protocolToken);
     if (token.empty()) {
         LOG_WARN(common::Logger::get(kLog),
@@ -131,6 +113,24 @@ WsUpgradeResult WebSocketHandler::validateUpgrade(
         LOG_WARN(common::Logger::get(kLog),
             "WS upgrade: invalid/expired token from ip='{}'", clientIp);
         return WsUpgradeResult::fail(common::ErrorCode::kInvalidToken);
+    }
+
+    // Step 3: RFC 6455 required headers (only if auth and view are valid).
+    auto upgradeIt  = req.find(boost::beast::http::field::upgrade);
+    auto versionIt  = req.find("Sec-WebSocket-Version");
+    auto keyIt      = req.find("Sec-WebSocket-Key");
+
+    if (upgradeIt == req.end() || upgradeIt->value() != "websocket") {
+        LOG_WARN(common::Logger::get(kLog), "WS upgrade: missing Upgrade: websocket");
+        return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
+    }
+    if (versionIt == req.end() || versionIt->value() != "13") {
+        LOG_WARN(common::Logger::get(kLog), "WS upgrade: Sec-WebSocket-Version != 13");
+        return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
+    }
+    if (keyIt == req.end()) {
+        LOG_WARN(common::Logger::get(kLog), "WS upgrade: missing Sec-WebSocket-Key");
+        return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
     }
 
     // Step 4: Capacity check.

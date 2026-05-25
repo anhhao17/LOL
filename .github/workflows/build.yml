@@ -127,7 +127,7 @@ jobs:
           build/avenger \
             --web-root ui/dist \
             --port 8080 \
-            --log-level info &
+            --log-level debug > server.log 2>&1 &
           # Wait for the server to be ready
           for i in $(seq 1 20); do
             curl -sf http://127.0.0.1:8080/ && break
@@ -155,3 +155,15 @@ jobs:
         # Intentionally last: triggering lockout blocks 127.0.0.1 for 5 minutes,
         # which would break any subsequent test that calls do_login().
         run: pytest test_bruteforce.py -v --timeout=60
+
+      - name: Print server log
+        if: always()
+        run: cat server.log
+
+      - name: Upload server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: server.log
+          retention-days: 7

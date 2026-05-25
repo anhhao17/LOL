@@ -6,6 +6,7 @@
 #include "middleware/csrf_middleware.hpp"
 #include "middleware/logging_middleware.hpp"
 #include "middleware/rate_limit_middleware.hpp"
+#include "api/stream_handler.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/signal_set.hpp>
@@ -125,10 +126,12 @@ void App::setupRoutes(const Config& cfg) {
     loginHandler_  = std::make_unique<api::LoginHandler>(ctx_);
     logoutHandler_ = std::make_unique<api::LogoutHandler>(ctx_);
     staticHandler_ = std::make_unique<api::StaticHandler>(cfg.webRoot);
+    streamHandler_ = std::make_unique<api::StreamHandler>(ctx_, *wsHandler_);
 
     loginHandler_->registerRoutes(*router_);
     logoutHandler_->registerRoutes(*router_);
     staticHandler_->registerRoutes(*router_);
+    streamHandler_->registerRoutes(*router_);
 }
 
 void App::waitForSignal() {

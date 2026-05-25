@@ -38,6 +38,7 @@ add_executable(avenger
     src/api/login_handler.cpp
     src/api/logout_handler.cpp
     src/api/static_handler.cpp
+    src/api/stream_handler.cpp
     src/streaming/file_frame_source.cpp
     src/streaming/stream_manager.cpp
     src/streaming/websocket_handler.cpp

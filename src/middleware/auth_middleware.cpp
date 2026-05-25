@@ -7,10 +7,11 @@ AuthMiddleware::AuthMiddleware(std::shared_ptr<session::SessionStore> store)
     : store_(std::move(store)) {}
 
 // Only /api/ routes are protected. Non-API paths (SPA, static files, health) are always public.
-// /api/v1/login is the one API path that is explicitly public.
+// /api/v1/login and /api/v1/stream are explicitly public (they handle their own auth).
 bool AuthMiddleware::isProtectedPath(std::string_view target) noexcept {
     if (target.rfind("/api/", 0) != 0) return false;       // not an API path — public
     if (target.rfind("/api/v1/login", 0) == 0) return false; // login endpoint — public
+    if (target.rfind("/api/v1/stream", 0) == 0) return false; // stream endpoint — public (handles own auth)
     return true;
 }
 

@@ -3,6 +3,7 @@
 #include "api/login_handler.hpp"
 #include "api/logout_handler.hpp"
 #include "api/static_handler.hpp"
+#include "api/stream_handler.hpp"
 #include "app/config_manager.hpp"
 #include "app/shared_context.hpp"
 #include "routing/router.hpp"
@@ -41,6 +42,7 @@ private:
     std::unique_ptr<api::LoginHandler>  loginHandler_;
     std::unique_ptr<api::LogoutHandler> logoutHandler_;
     std::unique_ptr<api::StaticHandler> staticHandler_;
+    std::unique_ptr<api::StreamHandler> streamHandler_;
 
 };
 

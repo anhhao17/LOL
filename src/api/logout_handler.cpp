@@ -1,5 +1,6 @@
 #include "api/logout_handler.hpp"
 #include "common/logger.hpp"
+#include <nlohmann/json.hpp>
 #include <boost/beast/http/verb.hpp>
 
 namespace api {
@@ -24,10 +25,10 @@ void LogoutHandler::handleLogout(http_layer::HttpRequest& req,
         ctx_.sessionStore->revoke(req.session->token);
     }
 
-    asyncResp->resp = http_layer::HttpResponse::okEmpty();
+    asyncResp->resp = http_layer::HttpResponse::ok(nlohmann::json{});
     // Clear the session cookie.
     asyncResp->resp.header("Set-Cookie",
-        "session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0");
+        "session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
 }
 
 } // namespace api

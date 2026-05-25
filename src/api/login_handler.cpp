@@ -85,7 +85,7 @@ void LoginHandler::handleLogin(http_layer::HttpRequest& req,
     asyncResp->resp = http_layer::HttpResponse::ok(data);
     asyncResp->resp.header("Set-Cookie",
         "session=" + session.token +
-        "; HttpOnly; Secure; SameSite=Strict; Path=/");
+        "; HttpOnly; SameSite=Strict; Path=/");
 }
 
 } // namespace api

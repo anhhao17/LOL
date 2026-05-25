@@ -144,6 +144,14 @@ jobs:
         working-directory: tests
         env:
           BASE_URL: http://127.0.0.1:8080
-        # WebSocket frame tests require --video-cl/--video-ir files which CI doesn't have.
+        # WebSocket frame tests need --video-cl/--video-ir files not present in CI.
         # TestStreamHttpValidation only exercises pre-upgrade HTTP rejection paths.
         run: pytest test_stream.py::TestStreamHttpValidation -v --timeout=30
+
+      - name: Run brute-force lockout tests (must be last)
+        working-directory: tests
+        env:
+          BASE_URL: http://127.0.0.1:8080
+        # Intentionally last: triggering lockout blocks 127.0.0.1 for 5 minutes,
+        # which would break any subsequent test that calls do_login().
+        run: pytest test_bruteforce.py -v --timeout=60

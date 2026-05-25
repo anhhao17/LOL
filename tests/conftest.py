@@ -25,6 +25,11 @@ def do_login(username=ADMIN_USER, password=ADMIN_PASS) -> requests.Response:
     return requests.post(LOGIN_URL, json={"username": username, "password": password})
 
 
+def login_data(resp: requests.Response) -> dict:
+    """Extract the data payload from a successful login response."""
+    return resp.json()["data"]
+
+
 def assert_error_code(response: requests.Response, expected_code: str) -> None:
     """Assert response JSON contains the expected error code string."""
     body = response.json()
@@ -57,16 +62,14 @@ def auth_session():
     resp = do_login()
     assert resp.status_code == 200, f"Login failed: {resp.status_code} {resp.text}"
 
-    body       = resp.json()
-    csrf_token = body["csrfToken"]
+    data       = login_data(resp)
+    csrf_token = data["csrfToken"]
 
     session = requests.Session()
-    # Copy the session cookie set by the server
     session.cookies.update(resp.cookies)
 
     yield session, csrf_token
 
-    # Teardown: logout to release the server-side session
     try:
         session.post(LOGOUT_URL, headers={"X-CSRF-Token": csrf_token})
     except Exception:

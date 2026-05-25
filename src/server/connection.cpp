@@ -56,6 +56,8 @@ void Connection::onRead(beast::error_code ec, size_t) {
 
     // WebSocket upgrade request?
     if (ws::is_upgrade(req_)) {
+        LOG_DEBUG(common::Logger::get(kLog),
+            "--> WS upgrade {} ip='{}'", std::string(req_.target()), remoteIp());
         upgradeToWebSocket();
         return;
     }
@@ -125,6 +127,11 @@ void Connection::upgradeToWebSocket() {
     wsSessionToken_ = result.sessionToken;
 
     ws_ = std::make_unique<ws::stream<beast::tcp_stream>>(std::move(stream_));
+
+    // The tcp_stream carries the 30s HTTP read timer into the WebSocket.
+    // Disable it — WebSocket connections are long-lived by design.
+    ws_->next_layer().expires_never();
+
     ws_->set_option(ws::stream_base::decorator([](ws::response_type& res) {
         res.set(boost::beast::http::field::server, "QUANTUM/1.0");
     }));

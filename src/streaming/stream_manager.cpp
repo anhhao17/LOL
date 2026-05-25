@@ -18,57 +18,85 @@ std::optional<ViewType> StreamManager::parseViewType(std::string_view s) noexcep
 
 void StreamManager::setSource(SourceChannel channel, std::unique_ptr<IFrameSource> source) {
     std::lock_guard<std::mutex> lock(sourceMutex_);
-    sources_[channel] = std::move(source);
+    auto& entry = sources_[channel];
+    if (entry.running && entry.source) {
+        entry.source->stop();
+        entry.running = false;
+    }
+    entry.source = std::move(source);
+}
+
+std::set<SourceChannel> StreamManager::neededChannels() const {
+    // Call under mutex_.
+    std::set<SourceChannel> needed;
+    for (auto& [conn, info] : clients_) {
+        switch (info.viewType) {
+            case ViewType::kColorMain:
+            case ViewType::kColorSub:
+                needed.insert(SourceChannel::CL);
+                break;
+            case ViewType::kIrMain:
+            case ViewType::kIrSub:
+                needed.insert(SourceChannel::IR);
+                break;
+            case ViewType::kBothMain:
+            case ViewType::kBothSub:
+                needed.insert(SourceChannel::CL);
+                needed.insert(SourceChannel::IR);
+                break;
+        }
+    }
+    return needed;
+}
+
+void StreamManager::syncSources(const std::set<SourceChannel>& needed) {
+    // Call under sourceMutex_, not mutex_.
+    for (auto& [ch, entry] : sources_) {
+        if (!entry.source) continue;
+        const bool want = needed.count(ch) > 0;
+        if (want && !entry.running) {
+            entry.running = true;
+            SourceChannel channel = ch;
+            entry.source->start([this, channel](const std::vector<uint8_t>& frame) {
+                pushFrame(channel, frame);
+            });
+            LOG_INFO(common::Logger::get(kLog),
+                "Source started: channel={}", static_cast<int>(ch));
+        } else if (!want && entry.running) {
+            entry.running = false;
+            entry.source->stop();
+            LOG_INFO(common::Logger::get(kLog),
+                "Source stopped: channel={}", static_cast<int>(ch));
+        }
+    }
 }
 
 bool StreamManager::add(WsStream* conn, ViewType viewType, std::string sessionId) {
-    bool shouldStart = false;
+    std::set<SourceChannel> needed;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         clients_[conn] = ClientInfo{viewType, std::move(sessionId)};
         LOG_INFO(common::Logger::get(kLog), "WS client added: total={}", clients_.size());
-        if (clients_.size() == 1) shouldStart = true;
+        needed = neededChannels();
     }
-
-    if (shouldStart) {
+    {
         std::lock_guard<std::mutex> lock(sourceMutex_);
-        if (!sourcesRunning_) {
-            sourcesRunning_ = true;
-            LOG_INFO(common::Logger::get(kLog), "Starting frame sources");
-            startSources();
-        }
+        syncSources(needed);
     }
-
     return true;
 }
 
 void StreamManager::remove(WsStream* conn) noexcept {
-    bool shouldStop = false;
+    std::set<SourceChannel> needed;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         clients_.erase(conn);
         LOG_INFO(common::Logger::get(kLog), "WS client removed: total={}", clients_.size());
-        if (clients_.empty()) shouldStop = true;
+        needed = neededChannels();
     }
-
-    if (shouldStop) {
+    {
         std::lock_guard<std::mutex> lock(sourceMutex_);
-        if (sourcesRunning_) {
-            sourcesRunning_ = false;
-            LOG_INFO(common::Logger::get(kLog), "Stopping frame sources (no clients)");
-            for (auto& [ch, src] : sources_)
-                src->stop();
-        }
-    }
-}
-
-void StreamManager::startSources() {
-    // Called under sourceMutex_.
-    for (auto& [ch, src] : sources_) {
-        SourceChannel channel = ch;
-        src->start([this, channel](const std::vector<uint8_t>& frame) {
-            pushFrame(channel, frame);
-        });
+        syncSources(needed);
     }
 }
 

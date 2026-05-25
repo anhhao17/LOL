@@ -26,6 +26,7 @@ enum class ViewType : uint32_t {
 using WsStream = boost::beast::websocket::stream<boost::beast::tcp_stream>;
 
 // Tracks connected WebSocket streaming clients and broadcasts frames to them.
+// Sources are started on-demand per channel: a CL-only client won't start the IR source.
 class StreamManager {
 public:
     StreamManager() = default;
@@ -34,34 +35,37 @@ public:
 
     [[nodiscard]] static std::optional<ViewType> parseViewType(std::string_view s) noexcept;
 
-    // Register a frame source for a channel. Sources are started on-demand
-    // when the first client connects and stopped when the last one leaves.
     void setSource(SourceChannel channel, std::unique_ptr<IFrameSource> source);
 
     bool add(WsStream* conn, ViewType viewType, std::string sessionId);
     void remove(WsStream* conn) noexcept;
 
-    // Called by frame sources: prepends the 1-byte channel tag and broadcasts.
     void pushFrame(SourceChannel channel, const std::vector<uint8_t>& jpeg);
-
-    // Broadcast binary frame to all clients subscribed to the given view type.
     void broadcast(ViewType viewType, const std::vector<uint8_t>& frame);
 
     [[nodiscard]] size_t clientCount() const noexcept;
 
 private:
-    void startSources(); // call with mutex_ held
+    // Returns which channels are needed by the current clients_. Call under mutex_.
+    std::set<SourceChannel> neededChannels() const;
+
+    // Start/stop sources to match the needed set. Call under sourceMutex_, NOT mutex_.
+    void syncSources(const std::set<SourceChannel>& needed);
 
     struct ClientInfo {
-        ViewType viewType;
+        ViewType    viewType;
         std::string sessionId;
     };
 
-    std::map<WsStream*, ClientInfo>                        clients_;
-    std::map<SourceChannel, std::unique_ptr<IFrameSource>> sources_;
-    bool                                                   sourcesRunning_{false};
+    struct SourceEntry {
+        std::unique_ptr<IFrameSource> source;
+        bool running{false};
+    };
+
+    std::map<WsStream*, ClientInfo>      clients_;
+    std::map<SourceChannel, SourceEntry> sources_;
     mutable std::mutex mutex_;        // protects clients_
-    std::mutex         sourceMutex_;  // serialises start/stop lifecycle
+    std::mutex         sourceMutex_;  // serialises source start/stop lifecycle
 };
 
 } // namespace streaming

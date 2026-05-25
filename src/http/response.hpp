@@ -51,7 +51,7 @@ public:
         raw_.set("X-Frame-Options", "DENY");
         raw_.set("Referrer-Policy", "strict-origin-when-cross-origin");
         raw_.set("Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:");
         return *this;
     }
 

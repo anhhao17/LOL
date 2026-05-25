@@ -11,10 +11,12 @@ void LoggingMiddleware::before(http_layer::HttpRequest& req,
     LOG_INFO(common::Logger::get("middleware"),
         "--> {} {} ip='{}'", req.method(), req.target(), req.remoteIp);
 
-    // Wrap the AsyncResp send to log after response is determined.
-    // We capture a reference to the resp that will be populated by the handler.
-    auto& resp = asyncResp->resp;
-    (void)resp; // resp logged in ~AsyncResp path — log the request here.
+    auto userAgent = std::string(req.raw[boost::beast::http::field::user_agent]);
+    auto referer   = std::string(req.raw[boost::beast::http::field::referer]);
+    if (!userAgent.empty())
+        LOG_DEBUG(common::Logger::get("middleware"), "    User-Agent: {}", userAgent);
+    if (!referer.empty())
+        LOG_DEBUG(common::Logger::get("middleware"), "    Referer: {}", referer);
 
     next();
 

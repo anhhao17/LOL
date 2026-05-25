@@ -59,6 +59,8 @@ private:
     [[nodiscard]] static std::pair<std::string, std::string>
         parseProtocolHeader(std::string_view header);
 
+    [[nodiscard]] static std::string parseViewFromTarget(std::string_view target);
+
     [[nodiscard]] std::string extractToken(
         const boost::beast::http::request<boost::beast::http::string_body>& req,
         std::string_view protocolToken) const;

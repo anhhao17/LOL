@@ -4,7 +4,6 @@
 #include "session/session_store.hpp"
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace middleware {
 
@@ -19,9 +18,8 @@ public:
 private:
     std::shared_ptr<session::SessionStore> store_;
 
-    static const std::vector<std::string> kPublicPrefixes;
-
-    [[nodiscard]] bool isPublicPath(std::string_view target) const noexcept;
+    // Only /api/ routes require auth (except /api/v1/login which is always public).
+    [[nodiscard]] static bool isProtectedPath(std::string_view target) noexcept;
     [[nodiscard]] std::string extractToken(const http_layer::HttpRequest& req) const;
 };
 

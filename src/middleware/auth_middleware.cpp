@@ -3,27 +3,22 @@
 
 namespace middleware {
 
-const std::vector<std::string> AuthMiddleware::kPublicPrefixes{
-    "/api/v1/login",
-    "/ui/",
-    "/health",
-};
-
 AuthMiddleware::AuthMiddleware(std::shared_ptr<session::SessionStore> store)
     : store_(std::move(store)) {}
 
-bool AuthMiddleware::isPublicPath(std::string_view target) const noexcept {
-    for (const auto& prefix : kPublicPrefixes) {
-        if (target.rfind(prefix, 0) == 0) return true;
-    }
-    return false;
+// Only /api/ routes are protected. Non-API paths (SPA, static files, health) are always public.
+// /api/v1/login is the one API path that is explicitly public.
+bool AuthMiddleware::isProtectedPath(std::string_view target) noexcept {
+    if (target.rfind("/api/", 0) != 0) return false;       // not an API path — public
+    if (target.rfind("/api/v1/login", 0) == 0) return false; // login endpoint — public
+    return true;
 }
 
 std::string AuthMiddleware::extractToken(const http_layer::HttpRequest& req) const {
     // 1. Authorization: Bearer <token>
     auto authHeader = req.header("Authorization");
     static constexpr std::string_view kBearer = "Bearer ";
-    if (authHeader.rfind(kBearer, 0) == 0) {
+    if (authHeader.rfind(std::string(kBearer), 0) == 0) {
         return authHeader.substr(kBearer.size());
     }
     // 2. Cookie: session=<token>
@@ -41,7 +36,7 @@ std::string AuthMiddleware::extractToken(const http_layer::HttpRequest& req) con
 void AuthMiddleware::before(http_layer::HttpRequest& req,
                             const std::shared_ptr<http_layer::AsyncResp>& asyncResp,
                             NextFn next) {
-    if (isPublicPath(req.target())) {
+    if (!isProtectedPath(req.target())) {
         next();
         return;
     }

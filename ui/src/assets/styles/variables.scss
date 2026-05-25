@@ -1,0 +1,31 @@
+// ── Brand colours ────────────────────────────────────────────────────────────
+$quantum-primary:   #1a73e8;
+$quantum-secondary: #5f6368;
+$quantum-dark:      #1e1e2e;
+$quantum-darker:    #16161e;
+$quantum-surface:   #27273a;
+$quantum-border:    #383853;
+$quantum-text:      #cdd6f4;
+$quantum-muted:     #6c7086;
+$quantum-success:   #a6e3a1;
+$quantum-warning:   #f9e2af;
+$quantum-danger:    #f38ba8;
+
+// ── Bootstrap overrides ───────────────────────────────────────────────────────
+$primary:           $quantum-primary;
+$body-bg:           $quantum-dark;
+$body-color:        $quantum-text;
+$border-color:      $quantum-border;
+$card-bg:           $quantum-surface;
+$card-border-color: $quantum-border;
+$input-bg:          $quantum-darker;
+$input-color:       $quantum-text;
+$input-border-color: $quantum-border;
+$input-focus-border-color: $quantum-primary;
+$input-placeholder-color: $quantum-muted;
+$nav-link-color:    $quantum-muted;
+$nav-link-hover-color: $quantum-text;
+$dropdown-bg:       $quantum-surface;
+$dropdown-border-color: $quantum-border;
+$dropdown-color:    $quantum-text;
+$modal-content-bg:  $quantum-surface;

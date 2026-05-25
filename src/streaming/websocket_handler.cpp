@@ -21,7 +21,6 @@ WebSocketHandler::parseProtocolHeader(std::string_view header) {
     std::istringstream ss{std::string(header)};
     std::string item;
     while (std::getline(ss, item, ',')) {
-        // Trim whitespace.
         auto first = item.find_first_not_of(" \t");
         if (first == std::string::npos) continue;
         item = item.substr(first);
@@ -35,12 +34,28 @@ WebSocketHandler::parseProtocolHeader(std::string_view header) {
     return {viewStr, tokenStr};
 }
 
+// Parses "?view=cl_view" (or "&view=cl_view") from a URL target.
+std::string WebSocketHandler::parseViewFromTarget(std::string_view target) {
+    auto qpos = target.find('?');
+    if (qpos == std::string_view::npos) return {};
+
+    auto query = target.substr(qpos + 1);
+    std::istringstream ss{std::string(query)};
+    std::string param;
+    while (std::getline(ss, param, '&')) {
+        if (param.rfind("view=", 0) == 0) {
+            return param.substr(5);
+        }
+    }
+    return {};
+}
+
 std::string WebSocketHandler::extractToken(
     const boost::beast::http::request<boost::beast::http::string_body>& req,
     std::string_view protocolToken) const {
     if (!protocolToken.empty()) return std::string(protocolToken);
 
-    // Fallback: Cookie header.
+    // Fallback: Cookie header (browser sends HttpOnly cookie automatically on same-origin WS).
     auto cookieIt = req.find(boost::beast::http::field::cookie);
     if (cookieIt != req.end()) {
         std::string cookie(cookieIt->value());
@@ -77,14 +92,24 @@ WsUpgradeResult WebSocketHandler::validateUpgrade(
         return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
     }
 
-    // Step 2: Parse Sec-WebSocket-Protocol: view=<type>, token=<value>
-    auto protocolIt = req.find("Sec-WebSocket-Protocol");
-    if (protocolIt == req.end()) {
-        LOG_WARN(common::Logger::get(kLog), "WS upgrade: missing Sec-WebSocket-Protocol");
-        return WsUpgradeResult::fail(common::ErrorCode::kInvalidWebSocketUpgrade);
+    // Step 2: Resolve view type.
+    // Priority: URL query string (?view=cl_view) → Sec-WebSocket-Protocol header.
+    std::string viewStr = parseViewFromTarget(req.target());
+    std::string protocolToken;
+
+    if (viewStr.empty()) {
+        auto protocolIt = req.find("Sec-WebSocket-Protocol");
+        if (protocolIt != req.end()) {
+            auto [v, t] = parseProtocolHeader(protocolIt->value());
+            viewStr      = v;
+            protocolToken = t;
+        }
     }
 
-    auto [viewStr, protocolToken] = parseProtocolHeader(protocolIt->value());
+    if (viewStr.empty()) {
+        LOG_WARN(common::Logger::get(kLog), "WS upgrade: no view type specified");
+        return WsUpgradeResult::fail(common::ErrorCode::kInvalidStreamType);
+    }
 
     auto viewType = StreamManager::parseViewType(viewStr);
     if (!viewType) {
@@ -93,11 +118,11 @@ WsUpgradeResult WebSocketHandler::validateUpgrade(
         return WsUpgradeResult::fail(common::ErrorCode::kInvalidStreamType);
     }
 
-    // Step 3: Token validation.
+    // Step 3: Token validation (protocol header token or HttpOnly session cookie).
     auto token = extractToken(req, protocolToken);
     if (token.empty()) {
         LOG_WARN(common::Logger::get(kLog),
-            "WS upgrade: no token from ip='{}'", clientIp);
+            "WS upgrade: no auth token from ip='{}'", clientIp);
         return WsUpgradeResult::fail(common::ErrorCode::kUnauthorized);
     }
 

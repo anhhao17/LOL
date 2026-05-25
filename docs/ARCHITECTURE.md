@@ -2,7 +2,9 @@
 
 ## Overview
 
-This document describes the architecture of the QUANTUM minimal implementation, following proven patterns from the OpenBMC bmcweb project.
+This document describes the architecture of the QUANTUM application — a C++ backend service with a Vue.js UI, modeled after the OpenBMC bmcweb pattern. Phase 1 delivers a secure login page and a real-time WebSocket streaming page.
+
+---
 
 ## System Architecture
 
@@ -13,6 +15,17 @@ This document describes the architecture of the QUANTUM minimal implementation, 
 │  │   App Class  │  │   Config     │  │   Lifecycle  │      │
 │  │              │  │   Manager    │  │   Manager    │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
+│  ┌──────────────┐                                           │
+│  │ Audit Logger │  ← structured access + security events   │
+│  └──────────────┘                                           │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│                 Static File Serving Layer                    │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  GET /ui/**  →  serve embedded or filesystem SPA     │  │
+│  │  (Vue 3 build output, path-traversal protected)      │  │
+│  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -25,10 +38,15 @@ This document describes the architecture of the QUANTUM minimal implementation, 
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                    Middleware Layer                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │     Auth     │  │   Logging    │  │     CORS     │      │
-│  │  Middleware  │  │  Middleware  │  │  Middleware  │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│                                                             │
+│  Request pipeline (in order):                              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐      │
+│  │   Auth   │→│   CSRF   │→│  Rate    │→│ Logging  │      │
+│  │          │ │  Check   │ │  Limit   │ │          │      │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘      │
+│  ┌──────────┐                                              │
+│  │   CORS   │                                              │
+│  └──────────┘                                              │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -43,7 +61,7 @@ This document describes the architecture of the QUANTUM minimal implementation, 
 │                      Server Layer                            │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │   HTTP       │  │ Connection   │  │   WebSocket  │      │
-│  │   Server     │  │  Manager     │  │   Support    │      │
+│  │   Server     │  │  Manager     │  │   Manager    │      │
 │  │  (SSL/TLS)   │  │              │  │  (Security)  │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 └─────────────────────────────────────────────────────────────┘
@@ -52,8 +70,13 @@ This document describes the architecture of the QUANTUM minimal implementation, 
 │                      Session Layer                           │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │   Session    │  │   Cookie     │  │   Token      │      │
-│  │   Manager    │  │  Management  │  │  Validation  │      │
+│  │   Store      │  │  Management  │  │  Generator   │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
+│  ┌──────────────┐  ┌──────────────┐                        │
+│  │  Password    │  │  Fail Delay  │  ← brute-force guard   │
+│  │  Hasher      │  │  (backoff)   │                        │
+│  │  (Argon2id)  │  └──────────────┘                        │
+│  └──────────────┘                                           │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -65,6 +88,79 @@ This document describes the architecture of the QUANTUM minimal implementation, 
 └─────────────────────────────────────────────────────────────┘
 ```
 
+---
+
+## Project Structure
+
+```
+Avenger/
+├── CMakeLists.txt
+├── src/
+│   ├── main.cpp
+│   ├── app/
+│   │   ├── app.hpp / app.cpp              # Bootstrap, io_context, thread pool
+│   │   └── config_manager.hpp / .cpp      # File + env + CLI args
+│   ├── server/
+│   │   ├── http_server.hpp / .cpp         # Acceptor, SSL context
+│   │   ├── connection.hpp / .cpp          # Per-connection state machine
+│   │   └── websocket_connection.hpp/.cpp  # HTTP→WS upgrade, frame I/O
+│   ├── http/
+│   │   ├── request.hpp                    # Parsed HTTP request wrapper
+│   │   ├── response.hpp                   # Builder for HTTP responses
+│   │   └── async_resp.hpp                 # RAII shared-ptr completion guard
+│   ├── routing/
+│   │   ├── router.hpp / .cpp              # Route registry + dispatch
+│   │   └── trie.hpp / .cpp                # O(k) URL pattern matching
+│   ├── middleware/
+│   │   ├── i_middleware.hpp               # Interface: beforeRequest/afterResponse
+│   │   ├── auth_middleware.hpp / .cpp     # Session token validation
+│   │   ├── csrf_middleware.hpp / .cpp     # Double-submit cookie check
+│   │   ├── rate_limit_middleware.hpp/.cpp # Per-IP sliding window counter
+│   │   ├── cors_middleware.hpp / .cpp     # Strict origin allowlist
+│   │   └── logging_middleware.hpp / .cpp  # Structured access log
+│   ├── session/
+│   │   ├── session_store.hpp / .cpp       # map<token, Session>, mutex-guarded
+│   │   └── token_generator.hpp / .cpp     # CSPRNG 256-bit (OpenSSL RAND_bytes)
+│   ├── auth/
+│   │   ├── user_store.hpp / .cpp          # SQLite user database
+│   │   ├── password_hasher.hpp / .cpp     # Argon2id via libsodium
+│   │   └── fail_delay.hpp / .cpp          # Exponential back-off on login failure
+│   ├── api/
+│   │   ├── i_api_handler.hpp              # Interface: match() + handle()
+│   │   ├── login_handler.hpp / .cpp       # POST /api/v1/login
+│   │   ├── logout_handler.hpp / .cpp      # POST /api/v1/logout
+│   │   └── static_handler.hpp / .cpp      # GET /ui/** → Vue SPA
+│   └── streaming/
+│       ├── websocket_handler.hpp / .cpp   # OnUpgrade/OnHandshake/OnClose
+│       └── stream_manager.hpp / .cpp      # Per-view broadcast register
+├── ui/                                    # Vue 3 + Vite + TypeScript
+│   ├── src/
+│   │   ├── views/
+│   │   │   ├── LoginView.vue
+│   │   │   └── StreamView.vue
+│   │   ├── components/
+│   │   │   ├── VideoCanvas.vue            # Renders binary frames from WS
+│   │   │   └── StreamControls.vue         # View type selector
+│   │   ├── store/
+│   │   │   ├── auth.ts                    # Pinia: user, csrfToken, isAuthenticated
+│   │   │   └── stream.ts                  # Pinia: WS state, selected view
+│   │   ├── services/
+│   │   │   ├── api.ts                     # Axios + CSRF header auto-attach
+│   │   │   └── websocket.ts               # WS wrapper with reconnect back-off
+│   │   ├── router/index.ts                # /login (public) + /stream (auth guard)
+│   │   └── App.vue
+│   ├── package.json
+│   └── vite.config.ts
+├── tests/
+│   ├── unit/
+│   └── integration/
+└── docs/
+    ├── ARCHITECTURE.md
+    └── CODING_RULES.md
+```
+
+---
+
 ## Layer Responsibilities
 
 ### Application Layer
@@ -74,150 +170,272 @@ This document describes the architecture of the QUANTUM minimal implementation, 
   - Configuration management
   - Component coordination
   - Route registration orchestration
+  - Structured audit logging (auth events, access violations)
+
+### Static File Serving Layer
+- **Purpose**: Serve the Vue 3 SPA to the browser
+- **Responsibilities**:
+  - Serve pre-built `index.html` + JS/CSS bundles from `/ui/**`
+  - Path-traversal protection (all paths resolved within web root)
+  - Cache-Control headers for static assets
+  - Fallback to `index.html` for Vue Router client-side routes
 
 ### Routing Layer
 - **Purpose**: URL matching and request dispatching
 - **Responsibilities**:
-  - URL pattern matching using trie data structure
+  - URL pattern matching using trie data structure — O(k) per path segment
   - Route handler registration
   - Path parameter extraction
   - HTTP method routing (GET, POST, PUT, DELETE, etc.)
 
 ### Middleware Layer
-- **Purpose**: Cross-cutting concerns and request processing pipeline
+- **Purpose**: Cross-cutting concerns applied before and after every handler
+- **Request pipeline order**: Auth → CSRF → Rate Limit → Logging → CORS
 - **Responsibilities**:
-  - Authentication and authorization
-  - Request/response logging
-  - CORS handling
-  - Rate limiting
-  - Request validation
+  - **Auth**: validate session token; skip for `/api/v1/login`, `/ui/**`, `/health`
+  - **CSRF**: for POST/PUT/DELETE, verify `X-CSRF-Token` header matches session value
+  - **Rate Limit**: per-IP sliding window; reject with `429` on excess
+  - **Logging**: structured access log (method, path, status, latency, client IP)
+  - **CORS**: strict origin allowlist; reject mismatched origins
 
 ### HTTP Layer
 - **Purpose**: HTTP abstraction and async response handling
 - **Responsibilities**:
   - Request/response wrapping
-  - Async operation coordination
-  - JSON serialization/deserialization
-  - Header management
-  - Status code handling
+  - Async operation coordination via `AsyncResp` RAII guard
+  - JSON serialization/deserialization (nlohmann/json)
+  - Header management and status codes
 
 ### Server Layer
 - **Purpose**: Network communication and connection management
 - **Responsibilities**:
-  - HTTP server implementation
+  - HTTP/HTTPS server (Boost.Beast)
   - Connection lifecycle management
   - WebSocket upgrade handling with security validation
-  - SSL/TLS support for HTTPS/WSS
-  - Connection pooling
-  - Dual-mode HTTP/HTTPS and WS/WSS support
+  - SSL/TLS (OpenSSL) for HTTPS and WSS on the same port
+  - Connection pooling and resource limits
 
 ### Session Layer
-- **Purpose**: User session management and authentication
+- **Purpose**: User session management, authentication primitives
 - **Responsibilities**:
-  - Session creation and validation
-  - Cookie-based session management
-  - Token generation and validation
-  - Session lifecycle management
-  - CSRF token generation
-  - Session cleanup and expiration
+  - Session creation and in-memory storage
+  - `HttpOnly Secure SameSite=Strict` cookie management
+  - CSPRNG token generation (OpenSSL `RAND_bytes`, 256-bit)
+  - CSRF token generation (128-bit)
+  - Session sliding expiry and cleanup
+  - **Password Hasher**: Argon2id via libsodium for constant-time verification
+  - **Fail Delay**: exponential back-off counter per IP after failed logins
 
 ### I/O Layer
-- **Purpose**: Low-level I/O operations and event loop
+- **Purpose**: Low-level async I/O and event loop
 - **Responsibilities**:
-  - Async I/O operations
-  - Socket management
-  - Event loop coordination
+  - Non-blocking async I/O (Boost.Asio)
+  - Socket lifecycle
+  - Event loop (multi-threaded `io_context`)
   - SSL/TLS encryption
-  - Network protocol handling
+
+---
 
 ## Request Flow
 
 ```
 ┌─────────────┐
-│   Client    │
+│   Browser   │
 └──────┬──────┘
-       │ HTTP Request
+       │ HTTPS Request
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                     I/O Layer                               │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Socket receives data → Boost::Asio event loop      │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Socket receives data → Boost::Asio event loop              │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                   Server Layer                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Connection manager parses HTTP request              │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Connection manager parses HTTP request (Boost.Beast)        │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                   HTTP Layer                                │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Request wrapper created                              │  │
-│  │  AsyncResp wrapper initialized                        │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Request wrapper created; AsyncResp initialized             │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                Middleware Layer                            │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Auth middleware → Logging middleware → CORS         │  │
-│  │  (Request processing pipeline)                        │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                Middleware Layer (Before)                     │
+│  Auth → CSRF → Rate Limit → Logging → CORS                  │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  Routing Layer                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Trie matches URL pattern → Route handler selected   │  │
-│  │  Path parameters extracted                           │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Trie matches URL → Route handler selected                  │
+│  Path parameters extracted                                  │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                Application Layer                            │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Route handler executes business logic               │  │
-│  │  Async operations performed (DBus, file I/O, etc.)   │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Handler executes business logic (async if needed)          │
+└─────────────────────────────────────────────────────────────┘
+       ↓ (response path)
+┌─────────────────────────────────────────────────────────────┐
+│                Middleware Layer (After)                      │
+│  CORS → Logging → Security headers appended                 │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   HTTP Layer (Return)                        │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Response populated with data/status                 │  │
-│  │  AsyncResp completion handler triggered              │  │
-│  └──────────────────────────────────────────────────────┘  │
+│             Server + I/O Layer (Return)                     │
+│  Response serialized and written to TLS socket              │
+└─────────────────────────────────────────────────────────────┘
+       ↓
+┌─────────────┐
+│   Browser   │
+└─────────────┘
+```
+
+---
+
+## Phase 1 — Login Flow
+
+```
+Browser                              Backend
+   │                                    │
+   │── GET /ui/login ──────────────────▶│
+   │◀── 200 index.html (Vue SPA) ───────│
+   │                                    │
+   │  [User fills form]                 │
+   │                                    │
+   │── POST /api/v1/login ─────────────▶│
+   │   Content-Type: application/json   │
+   │   { "username": "...",             │
+   │     "password": "..." }            │
+   │                                    ├─▶ rate_limit_middleware
+   │                                    │     check per-IP bucket (sliding window)
+   │                                    │     → 429 if exceeded
+   │                                    │
+   │                                    ├─▶ fail_delay
+   │                                    │     exponential back-off if IP in lockout
+   │                                    │     → 401 if locked
+   │                                    │
+   │                                    ├─▶ user_store.lookup(username)
+   │                                    │     → 401 (generic) if not found
+   │                                    │
+   │                                    ├─▶ password_hasher.verify(input, stored_hash)
+   │                                    │     constant-time Argon2id comparison
+   │                                    │     → 401 (generic) if mismatch
+   │                                    │
+   │                                    ├─▶ session_store.create()
+   │                                    │     token     = RAND_bytes(32) → hex
+   │                                    │     csrfToken = RAND_bytes(16) → hex
+   │                                    │     expiry    = now + 30 min (sliding)
+   │                                    │
+   │◀── 200 OK ─────────────────────────│
+   │    Set-Cookie: session=<token>;    │
+   │      HttpOnly; Secure;             │
+   │      SameSite=Strict; Path=/       │
+   │    { "csrfToken": "...",           │
+   │      "username": "...",            │
+   │      "role": 1 }                   │
+   │                                    │
+   │  [Vue Router → /stream]            │
+```
+
+---
+
+## Phase 1 — Streaming Flow (WebSocket)
+
+```
+Browser                                    Backend
+   │                                          │
+   │── WS Upgrade GET /api/v1/stream ────────▶│
+   │   Connection: Upgrade                    │  ← RFC 6455 required
+   │   Upgrade: websocket                     │
+   │   Sec-WebSocket-Key: <base64>            │
+   │   Sec-WebSocket-Version: 13              │
+   │   Sec-WebSocket-Protocol:                │
+   │     view=cl_view, token=<session-token>  │
+   │   Cookie: session=<token>                │
+   │                                          │
+   │                                   websocket_handler.OnUpgrade()
+   │                                          │
+   │                                          ├─▶ 1. Validate headers
+   │                                          │      Upgrade: websocket ✓
+   │                                          │      Connection: Upgrade ✓
+   │                                          │      Sec-WebSocket-Key present ✓
+   │                                          │      Sec-WebSocket-Version == 13 ✓
+   │                                          │
+   │                                          ├─▶ 2. Parse Sec-WebSocket-Protocol
+   │                                          │      view=<type>  → validate type
+   │                                          │      token=<val>  → extract token
+   │                                          │
+   │                                          ├─▶ 3. Validate token
+   │                                          │      session_store.lookup(token)
+   │                                          │      not expired, IP matches
+   │                                          │      → 401 if invalid
+   │                                          │
+   │                                          ├─▶ 4. Check session capacity
+   │                                          │      max concurrent WS per config
+   │                                          │      → 503 if exceeded
+   │                                          │
+   │◀── 101 Switching Protocols ──────────────│
+   │    Sec-WebSocket-Protocol: view=cl_view  │
+   │                                          │
+   │                                   stream_manager.register(con, VIEW_COLOR)
+   │                                          │
+   │◀── [binary frame] ───────────────────────│  timer-driven broadcast
+   │◀── [binary frame] ───────────────────────│  (MainAppVideoGrabber pattern)
+   │◀── [binary frame] ───────────────────────│
+   │                                          │
+   │── Close ────────────────────────────────▶│
+   │                                   stream_manager.remove(con)
+```
+
+**Supported view types** (Sec-WebSocket-Protocol values):
+
+| Value | Description |
+|-------|-------------|
+| `cl_view` | Color main stream |
+| `ir_view` | Infrared main stream |
+| `both_views` | Color + IR main stream |
+| `cl_sub_view` | Color sub stream |
+| `ir_sub_view` | Infrared sub stream |
+| `both_sub_views` | Color + IR sub stream |
+
+---
+
+## Authentication Flow
+
+```
+┌─────────────┐
+│   Client    │
+└──────┬──────┘
+       │ POST /api/v1/login
+       ↓
+┌─────────────────────────────────────────────────────────────┐
+│                Middleware Layer                            │
+│  Rate limit check → Fail delay check                        │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                  Middleware Layer (Return)                   │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Response logging → Header modification              │  │
-│  │  (Response processing pipeline)                      │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                Auth Layer                                  │
+│  user_store.lookup() → password_hasher.verify() (Argon2id)  │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Server Layer (Return)                      │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Response serialized and sent over socket            │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                Session Layer                               │
+│  Session created: token (256-bit) + csrfToken (128-bit)     │
+│  Stored in session_store (in-memory, mutex-guarded)         │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                     I/O Layer (Return)                      │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Data written to socket via Boost::Asio               │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                HTTP Layer (Return)                           │
+│  Set-Cookie: session=<token>; HttpOnly; Secure; SameSite=Strict │
+│  Body: { csrfToken, username, role }                        │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌─────────────┐
 │   Client    │
 └─────────────┘
 ```
+
+---
 
 ## WebSocket Security Flow
 
@@ -228,75 +446,108 @@ This document describes the architecture of the QUANTUM minimal implementation, 
        │ WebSocket Upgrade Request
        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Server Layer                              │
+│              WebSocket Security Validation                  │
+│                                                             │
+│  Step 1 — RFC 6455 Header Validation                        │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  Detect WebSocket upgrade headers                    │  │
+│  │  Upgrade: websocket              (required)          │  │
+│  │  Connection: Upgrade             (RFC 6455 §4.1)     │  │
+│  │  Sec-WebSocket-Key: <base64>     (required)          │  │
+│  │  Sec-WebSocket-Version: 13       (must be 13)        │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Step 2 — Protocol Header Validation                        │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Sec-WebSocket-Protocol: view=<type>, token=<value>  │  │
+│  │  Valid types: cl_view | ir_view | both_views |        │  │
+│  │               cl_sub_view | ir_sub_view |             │  │
+│  │               both_sub_views                          │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Step 3 — Authentication Validation                         │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Token source (in priority order):                    │  │
+│  │    1. Sec-WebSocket-Protocol token=<value>            │  │
+│  │    2. Cookie: session=<value>                         │  │
+│  │  Validate: token exists in session_store              │  │
+│  │  Validate: session not expired                        │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                             │
+│  Step 4 — Capacity Check                                    │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Active sessions < configured max → accept           │  │
+│  │  Otherwise → 503 Service Unavailable                 │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
-       ↓
-┌─────────────────────────────────────────────────────────────┐
-│              WebSocket Security Validation                 │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  1. Validate WebSocket headers                      │  │
-│  │     - Upgrade: websocket                              │  │
-│  │     - Connection: keep-alive                           │  │
-│  │     - Sec-WebSocket-Key: present                      │  │
-│  │     - Sec-WebSocket-Version: 13                        │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  2. Validate WebSocket protocol                       │  │
-│  │     - Sec-WebSocket-Protocol header                   │  │
-│  │     - Required: view=type, token=value               │  │
-│  │     - Valid view types: cl_view, ir_view, etc.        │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  3. Validate authentication token                     │  │
-│  │     - Check Authorization header (Bearer token)        │  │
-│  │     - Check Cookie header (session_token)             │  │
-│  │     - Validate against session store                 │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-       ↓ (if validation passes)
+       ↓ (validation passed)
 ┌─────────────────────────────────────────────────────────────┐
 │              WebSocket Connection Established              │
+│  Session registered in StreamClientRegister                 │
+│  Timer-driven frame broadcast begins                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Security Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Security Layers                           │
+│                                                             │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  WebSocket session created                            │  │
-│  │  Session ID generated                                 │  │
-│  │  Added to WebSocket manager                           │  │
-│  │  Real-time sensor streaming enabled                    │  │
+│  │  Transport: TLS 1.2+ (HTTPS/WSS), no SSLv2/SSLv3    │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Auth: Argon2id password hashing (libsodium)         │  │
+│  │        constant-time verify — no timing oracle       │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Session: CSPRNG 256-bit token (OpenSSL RAND_bytes)  │  │
+│  │           HttpOnly; Secure; SameSite=Strict cookie   │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  CSRF: double-submit — CSRF token in response body   │  │
+│  │         X-CSRF-Token header required for mutations   │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Rate Limit: per-IP sliding window (configurable)    │  │
+│  │  Fail Delay: exponential back-off on login failures  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  WebSocket: protocol header + session token check    │  │
+│  │             capacity limit enforced                  │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Headers: Content-Security-Policy, X-Frame-Options,  │  │
+│  │           X-Content-Type-Options, Referrer-Policy    │  │
+│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Static files: path traversal protection             │  │
+│  │  Errors: generic messages — no field enumeration     │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
-       ↓
-┌─────────────┐
-│   Client    │
-└─────────────┘
 ```
+
+### Threat Model Summary
+
+| Threat | Mitigation |
+|--------|-----------|
+| Credential brute force | `FailDelay` exponential back-off + per-IP rate limiter |
+| Password storage compromise | Argon2id with random salt (`crypto_pwhash`) |
+| Session hijacking | 256-bit CSPRNG token, `HttpOnly Secure SameSite=Strict` cookie |
+| CSRF attacks | Double-submit: CSRF token in body + `X-CSRF-Token` header check |
+| XSS → token theft | `HttpOnly` cookie (JS cannot read); CSP header blocks inline scripts |
+| WebSocket hijacking | Token validated server-side on every upgrade |
+| Man-in-the-middle | TLS mandatory; HTTP → HTTPS redirect in production |
+| Timing oracle on login | Constant-time Argon2id verification |
+| Directory traversal | Static handler validates all paths within web root |
+| Username enumeration | Login always returns the same generic error |
+| Clickjacking | `X-Frame-Options: DENY` response header |
+
+---
 
 ## Component Interactions
-
-### Route Registration Flow
-
-```
-┌──────────────┐
-│ Application  │
-│   Startup    │
-└──────┬───────┘
-       │
-       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                    Router                                  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Route registration (URL pattern + handler)          │  │
-│  └──────────────────────────────────────────────────────┘  │
-       ↓
-┌──────────────────────────────────────────────────────┐
-│            Trie (URL Pattern Storage)                 │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  Pattern added to trie structure               │  │
-│  │  O(1) lookup capability established          │  │
-│  └────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────┘
-```
 
 ### Async Operation Flow
 
@@ -307,25 +558,19 @@ This document describes the architecture of the QUANTUM minimal implementation, 
        │
        ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                  AsyncResp                                 │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Completion handler registered                       │  │
-│  │  Async operation initiated (DBus, file, etc.)         │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                  AsyncResp (RAII guard)                     │
+│  Completion handler registered                              │
+│  Async operation initiated (DB, file, timer, etc.)          │
+└─────────────────────────────────────────────────────────────┘
        ↓
 ┌──────────────────────────────────────────────────────┐
 │         External Async Operation                      │
-│  ┌────────────────────────────────────────────────┐  │
-│  │  Operation completes → Callback invoked          │  │
-│  └────────────────────────────────────────────────┘  │
+│  Operation completes → Callback invoked              │
 └──────────────────────────────────────────────────────┘
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  AsyncResp (Complete)                       │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Response populated                                  │  │
-│  │  Completion handler triggered                        │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  Response populated → destructor triggers send             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -338,9 +583,9 @@ This document describes the architecture of the QUANTUM minimal implementation, 
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │              Middleware Chain (Before)                       │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │   Auth   │→ │  Logging │→ │   CORS   │→ │  Validate│  │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │
+│  ┌──────┐  ┌──────┐  ┌────────────┐  ┌─────────┐  ┌──────┐ │
+│  │ Auth │→ │ CSRF │→ │ Rate Limit │→ │ Logging │→ │ CORS │ │
+│  └──────┘  └──────┘  └────────────┘  └─────────┘  └──────┘ │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌──────────────┐
@@ -349,9 +594,9 @@ This document describes the architecture of the QUANTUM minimal implementation, 
        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │              Middleware Chain (After)                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │ Validate │→ │   CORS   │→ │  Logging │→ │   Auth   │  │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │
+│  ┌──────┐  ┌─────────┐  ┌───────────────┐                  │
+│  │ CORS │→ │ Logging │→ │ Sec Headers   │                  │
+│  └──────┘  └─────────┘  └───────────────┘                  │
 └─────────────────────────────────────────────────────────────┘
        ↓
 ┌──────────────┐
@@ -359,144 +604,121 @@ This document describes the architecture of the QUANTUM minimal implementation, 
 └──────────────┘
 ```
 
+---
+
+## Vue Frontend Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Vue 3 SPA (Vite + TypeScript)             │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                  Vue Router                          │   │
+│  │  /login  → LoginView   (public)                     │   │
+│  │  /stream → StreamView  (auth guard: redirect login) │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌──────────────────┐    ┌──────────────────────────────┐  │
+│  │    LoginView     │    │         StreamView           │  │
+│  │                  │    │                              │  │
+│  │  Username field  │    │  ┌────────────────────────┐  │  │
+│  │  Password field  │    │  │     VideoCanvas.vue     │  │  │
+│  │  Submit button   │    │  │  (binary frame → blob  │  │  │
+│  │                  │    │  │   URL → <img>)         │  │  │
+│  │  On success:     │    │  └────────────────────────┘  │  │
+│  │  → store csrf    │    │  ┌────────────────────────┐  │  │
+│  │  → route /stream │    │  │   StreamControls.vue   │  │  │
+│  └──────────────────┘    │  │  cl_view | ir_view |   │  │  │
+│                          │  │  both_views | sub_*    │  │  │
+│  ┌──────────────────────────────────────────────────┐  │  │
+│  │                  Pinia Stores                    │  │  │
+│  │  auth.ts: { username, role, csrfToken, isAuthed }│  │  │
+│  │  stream.ts: { wsState, selectedView, frameRate } │  │  │
+│  └──────────────────────────────────────────────────┘  │  │
+│                                                         │  │
+│  ┌──────────────────────────────────────────────────┐  │  │
+│  │                  Services                        │  │  │
+│  │  api.ts       Axios, auto X-CSRF-Token header    │  │  │
+│  │  websocket.ts WS client, reconnect with back-off │  │  │
+│  └──────────────────────────────────────────────────┘  │  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Data Flow Patterns
 
-### Synchronous Request Flow
+### Synchronous Request
 ```
-Client → I/O → Server → HTTP → Middleware → Routing → Handler → 
+Client → I/O → Server → HTTP → Middleware → Routing → Handler →
 Middleware → HTTP → Server → I/O → Client
 ```
 
-### Asynchronous Request Flow
+### Asynchronous Request
 ```
-Client → I/O → Server → HTTP → Middleware → Routing → Handler → 
-AsyncResp → External Operation → Callback → AsyncResp → 
+Client → I/O → Server → HTTP → Middleware → Routing → Handler →
+AsyncResp → External Op → Callback → AsyncResp complete →
 Middleware → HTTP → Server → I/O → Client
 ```
 
-### WebSocket Upgrade Flow
+### WebSocket Upgrade
 ```
-Client → I/O → Server → HTTP → Middleware → Routing → 
-WebSocket Handler → WebSocket Connection → 
-Persistent WebSocket Communication
-```
-
-## Security Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   Security Layers                           │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Application: Route-level access control               │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Middleware: Session-based authentication              │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Server: SSL/TLS encryption (HTTPS/WSS)                │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  WebSocket: Header/protocol/token validation        │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  I/O: Secure socket handling                         │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+Client → I/O → Server → HTTP → Middleware → Routing →
+WebSocket Handler (security validation) →
+WebSocket Connection Established →
+Persistent binary frame broadcast
 ```
 
-### Authentication Flow
-
-```
-┌─────────────┐
-│   Client    │
-└──────┬──────┘
-       │ POST /api/login
-       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                Middleware Layer                            │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Auth middleware validates credentials                 │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                Session Layer                               │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Session created with unique token                    │  │
-│  │  CSRF token generated                                │  │
-│  │  Session stored in session store                     │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-       ↓
-┌─────────────────────────────────────────────────────────────┐
-│                   HTTP Layer (Return)                        │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Response with session token + CSRF token              │  │
-│  │  Set-Cookie header for session persistence              │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-       ↓
-┌─────────────┐
-│   Client    │
-└─────────────┘
-```
-
-### WebSocket Security Details
-
-**Header Validation:**
-- `Upgrade: websocket` - Must be present and correct
-- `Connection: keep-alive` - Required for persistent connections
-- `Sec-WebSocket-Key: <base64>` - Required for handshake
-- `Sec-WebSocket-Version: 13` - Must be version 13
-
-**Protocol Validation:**
-- `Sec-WebSocket-Protocol: view=<type>, token=<value>` - Required
-- Valid view types: `cl_view`, `ir_view`, `both_views`, `cl_sub_view`, `ir_sub_view`, `both_sub_views`
-- Token must be valid session token
-
-**Authentication Validation:**
-- Check `Authorization: Bearer <token>` header
-- Check `Cookie: session_token=<token>` header
-- Validate token against session store
-- Reject if token invalid or missing
+---
 
 ## Performance Considerations
 
 ### Async-First Design
-- All I/O operations are non-blocking
-- Event loop prevents thread blocking
-- High concurrency with minimal threads
+- All I/O operations are non-blocking (Boost.Asio strands)
+- Multi-threaded `io_context` (configurable thread count)
+- No blocking calls on the event loop
 
 ### Efficient Routing
-- Trie-based O(1) URL matching
-- No regex overhead for static routes
-- Path parameter extraction without parsing
+- Trie-based URL matching — O(k) per path segment, k = segment count
+- Path parameter extraction without regex overhead
 
 ### Memory Management
-- Smart pointers for resource management
-- Connection pooling
-- Efficient buffer management
+- Smart pointers throughout (no raw `new`/`delete`)
+- RAII for all resources (sockets, DB handles, locks)
+- `AsyncResp` shared ownership ensures response lifetime is correct
 
-## Scalability Architecture
+---
+
+## Configuration Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   Horizontal Scaling                         │
+│                   Configuration Sources                      │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Instance 1  │  │  Instance 2  │  │  Instance N  │      │
-│  │  (Port 8080) │  │  (Port 8080) │  │  (Port 8080) │      │
+│  │   Config     │  │ Environment  │  │   Command    │      │
+│  │   File       │  │   Variables  │  │   Line Args  │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Load Balancer                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Round-robin or health-based distribution             │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                   Config Manager                             │
+│  Validation → Merging → Runtime Access (read-only after init)│
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Note:** All instances use the same port (8080) for both HTTP and WebSocket connections. WebSocket uses HTTP upgrade on the same port, not a separate port.
+### CLI Arguments
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ssl, -s` | off | Enable SSL/TLS (switches default port to 8443) |
+| `--cert <file>` | — | SSL certificate file path |
+| `--key <file>` | — | SSL private key file path |
+| `--port <port>` | 8080 / 8443 | Listening port |
+| `--web-root <dir>` | `./ui/dist` | Path to Vue SPA build output |
+| `--max-ws-sessions <n>` | 6 | Maximum concurrent WebSocket streaming sessions |
+| `--help, -h` | — | Show help |
+
+---
 
 ## Error Handling Architecture
 
@@ -505,61 +727,21 @@ Persistent WebSocket Communication
 │                   Error Handling Flow                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │   Handler    │→ │   AsyncResp  │→ │   Response   │      │
-│  │   Exception  │  │   Error      │  │   Status      │      │
+│  │   Exception  │  │   Error CB   │  │   Status     │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Error Logging                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Structured error logging with context               │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                   Error Response Rules                       │
+│  Auth failures    → 401 with generic "invalid credentials"  │
+│  Rate exceeded    → 429 with Retry-After header             │
+│  Not found        → 404 (no path enumeration)               │
+│  Server error     → 500 (no internal detail to client)      │
+│  All errors logged with context (server-side only)          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Configuration Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   Configuration Sources                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   Config     │  │ Environment  │  │   Command    │      │
-│  │   File       │  │   Variables  │  │   Line Args  │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                   Configuration Manager                      │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Validation → Merging → Runtime Access               │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Server Configuration Options
-
-**Command Line Arguments:**
-- `--ssl, -s` - Enable SSL/TLS (default port: 8443)
-- `--cert <file>` - SSL certificate file path
-- `--key <file>` - SSL private key file path
-- `--port <port>` - Server port (default: 8080, 8443 with SSL)
-- `--help, -h` - Show help message
-
-**SSL/TLS Configuration:**
-- Uses OpenSSL for SSL/TLS support
-- Supports both HTTP/HTTPS and WS/WSS on same port
-- Configurable certificate and key files
-- SSL context with security options:
-  - SSLv23/TLS support
-  - No SSLv2 (deprecated)
-  - Single DH use
-  - Certificate validation
-
-**Session Configuration:**
-- Session tokens with unique identifiers
-- CSRF tokens for form protection
-- Cookie-based session persistence
-- Session expiration and cleanup
+---
 
 ## Monitoring and Observability
 
@@ -567,68 +749,80 @@ Persistent WebSocket Communication
 ┌─────────────────────────────────────────────────────────────┐
 │                   Monitoring Layers                           │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  Application: Business metrics, custom events         │  │
+│  │  Security: auth failures, token validation, lockouts │  │
 │  └──────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  HTTP: Request/response metrics, error rates         │  │
+│  │  HTTP: method, path, status code, latency, client IP │  │
 │  └──────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  WebSocket: Connection metrics, message rates        │  │
+│  │  WebSocket: active sessions, upgrade success/fail    │  │
 │  └──────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────┐  │
-│  │  Server: Connection metrics, resource usage          │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  I/O: Socket metrics, async operation timing        │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Security: Authentication events, access logs        │  │
+│  │  Server: connection count, resource usage            │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Logging Architecture
+### Logging Levels
+
+| Level | Usage |
+|-------|-------|
+| `TRACE` | Frame-level WS events (dev only) |
+| `DEBUG` | Request routing, session ops |
+| `INFO` | Startup, login success, WS connections |
+| `WARN` | Rate limit hits, auth failures |
+| `ERROR` | Handler exceptions, DB errors |
+| `CRITICAL` | Service cannot continue |
+
+### Log Outputs
+- **Console**: structured format with timestamp, level, source file, message
+- **File**: persistent `quantum.log` with rotation
+- **Audit CSV**: security events (login success/fail, session create/revoke)
+
+---
+
+## Dependencies
+
+### Backend (C++)
+
+| Library | Version | Purpose |
+|---------|---------|---------|
+| Boost.Asio / Beast | 1.82+ | Async I/O, HTTP, WebSocket |
+| OpenSSL | 3.x | TLS, CSPRNG |
+| libsodium | 1.0.18+ | Argon2id password hashing |
+| SQLite3 | 3.x | User database |
+| nlohmann/json | 3.x | JSON parsing |
+| spdlog | 1.x | Structured logging |
+| {fmt} | 10.x | String formatting |
+
+### Frontend (Vue 3)
+
+| Library | Purpose |
+|---------|---------|
+| Vue 3 + Vite | SPA framework + build tooling |
+| TypeScript | Type safety |
+| Pinia | State management (auth, stream) |
+| Vue Router 4 | Client-side routing with auth guard |
+| Axios | HTTP client with interceptors |
+
+---
+
+## Scalability Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   Logging Levels                              │
+│                   Horizontal Scaling                         │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   TRACE      │  │   DEBUG      │  │   INFO       │      │
-│  │  (Detailed)  │  │  (Diag)      │  │  (General)   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   WARN       │  │   ERROR      │  │  CRITICAL    │      │
-│  │  (Warnings)  │  │  (Errors)    │  │  (Critical)  │      │
+│  │  Instance 1  │  │  Instance 2  │  │  Instance N  │      │
+│  │  (Port 8443) │  │  (Port 8443) │  │  (Port 8443) │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                   Logging Outputs                            │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Console: Structured logging with source location     │  │
-│  └──────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  File: Persistent log file (jetson.log)               │  │
-│  └──────────────────────────────────────────────────────┘  │
+│                   Load Balancer (TLS termination)            │
+│  Session affinity required (in-memory session store)         │
+│  Or: externalize session store (Redis) for stateless scale   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### WebSocket Monitoring
-
-**Connection Metrics:**
-- Active WebSocket connections count
-- Connection success/failure rates
-- WebSocket upgrade success rates
-- Session ID tracking
-
-**Security Metrics:**
-- Authentication failures
-- Protocol validation failures
-- Token validation failures
-- Unauthorized connection attempts
-
-**Performance Metrics:**
-- Message throughput
-- Latency measurements
-- Connection duration
-- Memory usage per connection
+> **Note**: HTTP and WebSocket share the same port. WebSocket uses HTTP upgrade — no separate port needed.

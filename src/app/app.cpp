@@ -73,8 +73,6 @@ int App::run(int argc, char** argv) {
 
         for (auto& t : threads_) t.join();
 
-        if (clSource_) clSource_->stop();
-        if (irSource_) irSource_->stop();
 
     } catch (const std::exception& ex) {
         LOG_CRITICAL(common::Logger::get(kLog), "Fatal: {}", ex.what());
@@ -95,18 +93,15 @@ void App::setupContext(const Config& cfg) {
     wsHandler_ = std::make_unique<streaming::WebSocketHandler>(
         ctx_.streamManager, ctx_.sessionStore, cfg.maxWsSessions);
 
-    auto startSource = [&](std::unique_ptr<streaming::IFrameSource>& dest,
-                           const std::filesystem::path& path,
-                           streaming::SourceChannel ch) {
+    // Register sources — they start on first client connect, stop on last disconnect.
+    auto registerSource = [&](const std::filesystem::path& path, streaming::SourceChannel ch) {
         if (path.empty()) return;
-        dest = std::make_unique<streaming::FileFrameSource>(path);
-        dest->start([mgr = ctx_.streamManager, ch](const std::vector<uint8_t>& frame) {
-            mgr->pushFrame(ch, frame);
-        });
+        ctx_.streamManager->setSource(ch,
+            std::make_unique<streaming::FileFrameSource>(path));
     };
 
-    startSource(clSource_, cfg.videoFileCl, streaming::SourceChannel::CL);
-    startSource(irSource_, cfg.videoFileIr, streaming::SourceChannel::IR);
+    registerSource(cfg.videoFileCl, streaming::SourceChannel::CL);
+    registerSource(cfg.videoFileIr, streaming::SourceChannel::IR);
 }
 
 void App::setupMiddleware(const Config& cfg) {

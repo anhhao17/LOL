@@ -34,6 +34,10 @@ public:
 
     [[nodiscard]] static std::optional<ViewType> parseViewType(std::string_view s) noexcept;
 
+    // Register a frame source for a channel. Sources are started on-demand
+    // when the first client connects and stopped when the last one leaves.
+    void setSource(SourceChannel channel, std::unique_ptr<IFrameSource> source);
+
     bool add(WsStream* conn, ViewType viewType, std::string sessionId);
     void remove(WsStream* conn) noexcept;
 
@@ -46,13 +50,18 @@ public:
     [[nodiscard]] size_t clientCount() const noexcept;
 
 private:
+    void startSources();
+    void stopSources();
+
     struct ClientInfo {
         ViewType viewType;
         std::string sessionId;
     };
 
-    std::map<WsStream*, ClientInfo> clients_;
-    mutable std::mutex mutex_;
+    std::map<WsStream*, ClientInfo>          clients_;
+    std::map<SourceChannel, std::unique_ptr<IFrameSource>> sources_;
+    bool                                     sourcesRunning_{false};
+    mutable std::mutex                       mutex_;
 };
 
 } // namespace streaming

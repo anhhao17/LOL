@@ -7,7 +7,6 @@
 #include "app/shared_context.hpp"
 #include "routing/router.hpp"
 #include "server/http_server.hpp"
-#include "streaming/i_frame_source.hpp"
 #include "streaming/websocket_handler.hpp"
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
@@ -43,9 +42,6 @@ private:
     std::unique_ptr<api::LogoutHandler> logoutHandler_;
     std::unique_ptr<api::StaticHandler> staticHandler_;
 
-    // Frame sources run on their own threads; stopped before ioc_ exits.
-    std::unique_ptr<streaming::IFrameSource> clSource_;
-    std::unique_ptr<streaming::IFrameSource> irSource_;
 };
 
 } // namespace app

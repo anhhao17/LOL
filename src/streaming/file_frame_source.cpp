@@ -12,8 +12,8 @@ extern "C" {
 
 namespace streaming {
 
-static constexpr auto kLog      = "stream";
-static constexpr int  kJpegQP   = 5;   // 1=best … 31=worst for MJPEG
+static constexpr auto kLog    = "stream";
+static constexpr int  kJpegQP = 5;   // 1=best … 31=worst for MJPEG
 
 FileFrameSource::FileFrameSource(std::filesystem::path path)
     : path_(std::move(path)) {}
@@ -33,7 +33,6 @@ void FileFrameSource::stop() noexcept {
     if (thread_.joinable()) thread_.join();
 }
 
-// Interruptible sleep that checks running_ in 10 ms chunks.
 static void sleepUntil(std::chrono::steady_clock::time_point until,
                        const std::atomic<bool>& running) {
     while (running.load() && std::chrono::steady_clock::now() < until) {
@@ -46,9 +45,11 @@ static void sleepUntil(std::chrono::steady_clock::time_point until,
 }
 
 void FileFrameSource::loop() {
+    // Route all FFmpeg log output through our own logger; suppress its stderr spam.
+    av_log_set_level(AV_LOG_QUIET);
+
     if (!std::filesystem::exists(path_)) {
-        LOG_ERROR(common::Logger::get(kLog),
-            "Video file not found: {}", path_.string());
+        LOG_ERROR(common::Logger::get(kLog), "Video file not found: {}", path_.string());
         return;
     }
 
@@ -82,7 +83,8 @@ void FileFrameSource::loop() {
     const AVCodec* decoder = avcodec_find_decoder(stream->codecpar->codec_id);
     if (!decoder) {
         avformat_close_input(&fmtCtx);
-        LOG_ERROR(common::Logger::get(kLog), "No decoder for codec {}", static_cast<int>(stream->codecpar->codec_id));
+        LOG_ERROR(common::Logger::get(kLog),
+            "No decoder for codec {}", static_cast<int>(stream->codecpar->codec_id));
         return;
     }
     AVCodecContext* decCtx = avcodec_alloc_context3(decoder);
@@ -95,11 +97,13 @@ void FileFrameSource::loop() {
     }
 
     // ── Open MJPEG encoder ────────────────────────────────────────────────────
-    const AVCodec* jpegEnc = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
+    // Use YUV420P + AVCOL_RANGE_JPEG instead of the deprecated YUVJ420P format.
+    const AVCodec* jpegEnc  = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
     AVCodecContext* jpegCtx = avcodec_alloc_context3(jpegEnc);
     jpegCtx->width          = decCtx->width;
     jpegCtx->height         = decCtx->height;
-    jpegCtx->pix_fmt        = AV_PIX_FMT_YUVJ420P;
+    jpegCtx->pix_fmt        = AV_PIX_FMT_YUV420P;
+    jpegCtx->color_range    = AVCOL_RANGE_JPEG;
     jpegCtx->time_base      = AVRational{1, 25};
     jpegCtx->flags         |= AV_CODEC_FLAG_QSCALE;
     jpegCtx->global_quality = FF_QP2LAMBDA * kJpegQP;
@@ -111,20 +115,27 @@ void FileFrameSource::loop() {
         return;
     }
 
-    // ── Scale context: decoded format → YUVJ420P ──────────────────────────────
+    // ── Scale context: decoded format → YUV420P (full range for JPEG) ─────────
     SwsContext* swsCtx = sws_getContext(
         decCtx->width, decCtx->height, decCtx->pix_fmt,
-        decCtx->width, decCtx->height, AV_PIX_FMT_YUVJ420P,
+        decCtx->width, decCtx->height, AV_PIX_FMT_YUV420P,
         SWS_BILINEAR, nullptr, nullptr, nullptr);
 
+    // Tell swscale the output is full range (JPEG) to avoid the deprecation warning.
+    sws_setColorspaceDetails(swsCtx,
+        sws_getCoefficients(SWS_CS_DEFAULT), 0,
+        sws_getCoefficients(SWS_CS_DEFAULT), 1,  // 1 = full range output
+        0, 1 << 16, 1 << 16);
+
     // ── Allocate frames and packets ───────────────────────────────────────────
-    AVFrame*  rawFrame = av_frame_alloc();
-    AVFrame*  yuvFrame = av_frame_alloc();
+    AVFrame* rawFrame = av_frame_alloc();
+    AVFrame* yuvFrame = av_frame_alloc();
     av_image_alloc(yuvFrame->data, yuvFrame->linesize,
-        decCtx->width, decCtx->height, AV_PIX_FMT_YUVJ420P, 32);
-    yuvFrame->width  = decCtx->width;
-    yuvFrame->height = decCtx->height;
-    yuvFrame->format = AV_PIX_FMT_YUVJ420P;
+        decCtx->width, decCtx->height, AV_PIX_FMT_YUV420P, 32);
+    yuvFrame->width       = decCtx->width;
+    yuvFrame->height      = decCtx->height;
+    yuvFrame->format      = AV_PIX_FMT_YUV420P;
+    yuvFrame->color_range = AVCOL_RANGE_JPEG;
 
     AVPacket* pkt     = av_packet_alloc();
     AVPacket* jpegPkt = av_packet_alloc();
@@ -138,7 +149,8 @@ void FileFrameSource::loop() {
         "Streaming '{}' @ {:.1f} fps  {}x{}",
         path_.filename().string(), fps, decCtx->width, decCtx->height);
 
-    auto nextFrame = std::chrono::steady_clock::now();
+    auto    nextFrame = std::chrono::steady_clock::now();
+    int64_t pts       = 0;  // monotonically increasing PTS for the MJPEG encoder
 
     // ── Main read/decode loop ─────────────────────────────────────────────────
     while (running_.load()) {
@@ -146,7 +158,6 @@ void FileFrameSource::loop() {
         int ret = av_read_frame(fmtCtx, pkt);
 
         if (ret == AVERROR_EOF) {
-            // Loop: seek back to start and flush codec buffers.
             av_seek_frame(fmtCtx, videoIdx, 0, AVSEEK_FLAG_BACKWARD);
             avcodec_flush_buffers(decCtx);
             nextFrame = std::chrono::steady_clock::now();
@@ -163,19 +174,16 @@ void FileFrameSource::loop() {
         while (avcodec_receive_frame(decCtx, rawFrame) >= 0) {
             if (!running_.load()) break;
 
-            // Throttle to native FPS.
             sleepUntil(nextFrame, running_);
             nextFrame += frameDelay;
 
-            // Convert pixel format.
             sws_scale(swsCtx,
                 rawFrame->data, rawFrame->linesize, 0, rawFrame->height,
                 yuvFrame->data, yuvFrame->linesize);
 
-            // Encode JPEG.
-            yuvFrame->pict_type     = AV_PICTURE_TYPE_I;
-            yuvFrame->pts           = 0;
-            yuvFrame->quality       = jpegCtx->global_quality;
+            yuvFrame->pict_type = AV_PICTURE_TYPE_I;
+            yuvFrame->pts       = pts++;
+            yuvFrame->quality   = jpegCtx->global_quality;
 
             if (avcodec_send_frame(jpegCtx, yuvFrame) >= 0 &&
                 avcodec_receive_packet(jpegCtx, jpegPkt) >= 0) {
@@ -199,7 +207,8 @@ void FileFrameSource::loop() {
     avcodec_free_context(&decCtx);
     avformat_close_input(&fmtCtx);
 
-    LOG_INFO(common::Logger::get(kLog), "Frame source stopped: {}", path_.filename().string());
+    LOG_INFO(common::Logger::get(kLog),
+        "Frame source stopped: {}", path_.filename().string());
 }
 
 } // namespace streaming

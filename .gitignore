@@ -1,0 +1,5 @@
+build/
+CMakeFiles/
+*.db
+*.log
+compile_commands.json

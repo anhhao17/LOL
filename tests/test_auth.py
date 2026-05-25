@@ -61,29 +61,33 @@ class TestLoginSuccess:
 
 
 # ── Login: invalid credentials ────────────────────────────────────────────────
+#
+# IMPORTANT: each test here consumes one fail-counter slot on 127.0.0.1.
+# kMaxFailAttempts = 5 (fail_delay.hpp). Keep total bad credential calls ≤ 4
+# so the counter never reaches lockout before TestLogout's auth_session fixture
+# resets it with a successful login.  Brute-force lockout tests live in
+# test_bruteforce.py and run last.
 
 class TestLoginInvalidCredentials:
     def test_wrong_password_returns_401(self):
+        # Combines status + error code check — one bad credential call.
         resp = do_login(password="definitely_wrong_password")
         assert resp.status_code == 401
-
-    def test_wrong_password_error_code(self):
-        resp = do_login(password="definitely_wrong_password")
-        assert_error_code(resp, "INVALID_CREDENTIALS")
+        assert_error_code(resp, "INVALID_CREDENTIALS")   # fail count: 1
 
     def test_unknown_user_returns_401(self):
-        resp = do_login(username="no_such_user", password="anything")
-        assert resp.status_code == 401
+        resp = do_login(username="no_such_user_xyz", password="anything")
+        assert resp.status_code == 401                    # fail count: 2
 
-    def test_unknown_user_same_error_as_wrong_password(self):
-        """Server must not reveal whether the username exists (enumeration prevention)."""
-        code_bad_user = do_login(username="no_such_user", password="anything").json()["error"]["code"]
-        code_bad_pass = do_login(username=ADMIN_USER, password="wrong_pass").json()["error"]["code"]
-        assert code_bad_user == code_bad_pass
+    def test_unknown_user_indistinguishable_from_wrong_password(self):
+        """Error code must be identical whether the user exists or not (no enumeration)."""
+        # One call only — we already know wrong_password → INVALID_CREDENTIALS above.
+        resp = do_login(username="another_no_such_user", password="anything")
+        assert_error_code(resp, "INVALID_CREDENTIALS")   # fail count: 3
 
     def test_empty_password_returns_4xx(self):
         resp = do_login(password="")
-        assert resp.status_code in (400, 401)
+        assert resp.status_code in (400, 401)             # fail count: 4 (≤ limit)
 
 
 # ── Login: input validation ───────────────────────────────────────────────────
